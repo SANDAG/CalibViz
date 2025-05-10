@@ -78,4 +78,5 @@ jobs:
         with:
           app-name: 'CalibViz'
           slot-name: 'Production'
+          package: '.'
           
