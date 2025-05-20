@@ -14,6 +14,8 @@ if dotenv_path:
 # Read environment variables
 model_data_rootdir = os.getenv("MODELDATA_ROOTDIR")
 model_runs_list_str = os.getenv("MODELRUNS_LIST")
+model_data_path = os.getenv("MODELDATA_PATH")
+model_data_file = os.getenv("MODELDATA_FILE")
 
 # Convert MODELRUNS_LIST from string to a list
 if model_runs_list_str:
@@ -21,10 +23,26 @@ if model_runs_list_str:
 else:
     model_runs_list = []
 
-# Function to read the CSV file for the selected model run
-def read_csv_for_model_run(model_run):
-    csv_file_path = os.path.join(model_data_rootdir, model_run, 'input', 'land_use.csv')  # Full path to file
-    return pd.read_csv(csv_file_path)
+# Function to read the data file for the selected model run
+def load_model_data_file(file_path):
+    """Load a data file into a pandas DataFrame based on its extension."""
+    if not os.path.isfile(file_path):
+        raise FileNotFoundError(f"File does not exist: {file_path}")
+
+    _, ext = os.path.splitext(file_path)  # Get the file extension
+
+    ext = ext.lower()
+    if ext == ".csv":
+        return pd.read_csv(file_path)
+    elif ext == ".json":
+        return pd.read_json(file_path)
+    elif ext in [".xls", ".xlsx"]:
+        return pd.read_excel(file_path)
+    elif ext == ".parquet":
+        return pd.read_parquet(file_path)
+    else:
+        raise ValueError(f"Unsupported file type: {ext}")
+
 
 app = dash.Dash(__name__)
 server = app.server  # This is required for Azure deployment
@@ -54,7 +72,8 @@ app.layout = html.Div(children=[
 def update_chart(selected_model_run):
     # Read the CSV corresponding to the selected model run
     try:
-        df = read_csv_for_model_run(selected_model_run)
+        file_path = os.path.join(model_data_rootdir, selected_model_run, model_data_path, model_data_file) # Full path to file
+        df = load_model_data_file(file_path)
         
         if df is None:
             return {
