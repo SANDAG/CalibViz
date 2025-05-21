@@ -48,7 +48,7 @@ app = dash.Dash(__name__)
 server = app.server  # This is required for Azure deployment
 
 app.layout = html.Div(children=[
-    html.H1("Dash CalibViz"),
+    html.H1("SANDAG CalibViz"),
     html.P("This is a simple Dash app for calibration visualization."),
     html.P(f"Model Data Root Directory: {model_data_rootdir}"),
     
