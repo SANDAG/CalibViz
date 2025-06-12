@@ -1,102 +1,155 @@
-import dash
-from dash import dcc, html
-from dash.dependencies import Input, Output
-from dotenv import load_dotenv, find_dotenv
 import os
 import pandas as pd
+import dash
+from dash import Dash, html, dash_table, dcc
+from dash import Input, Output, State
 import plotly.express as px
+import dash_leaflet as dl
+import numpy as np
+import plotly.graph_objects as go
+from dash import callback_context
+import dash_bootstrap_components as dbc
+from dotenv import load_dotenv, find_dotenv
 
-# Only load if the .env file is present
+
+# Load .env file
 dotenv_path = find_dotenv()
 if dotenv_path:
     load_dotenv(dotenv_path)
 
-# Read environment variables
-model_data_rootdir = os.getenv("MODELDATA_ROOTDIR")
-model_runs_list_str = os.getenv("MODELRUNS_LIST")
-model_data_path = os.getenv("MODELDATA_PATH")
-model_data_file = os.getenv("MODELDATA_FILE")
-
-# Convert MODELRUNS_LIST from string to a list
-if model_runs_list_str:
-    model_runs_list = model_runs_list_str.split(",")
+# Detect App environment and read environment variables
+if "DATABRICKS_HOST" in os.environ: # need to change this to match azure environment
+    ENV = "Azure"
+    scenario_id = os.getenv("DATABRICKS_SERVER_HOSTNAME")
+    scenario_id = os.getenv("DATABRICKS_HTTP_PATH")
+    scenario_id = os.getenv("DATABRICKS_TOKEN")
 else:
-    model_runs_list = []
+    ENV = "local"
+    scenario_id = os.getenv("SCENARIO_ID")
+    scenario = os.getenv("SCENARIO_PATH")
+    survey = os.getenv("SURVEY_PATH")
+    selected_model = os.getenv("SELECTED_MODEL")
+    scenario_name = scenario.split('\\')[-1]
 
-# Function to read the data file for the selected model run
-def load_model_data_file(file_path):
-    """Load a data file into a pandas DataFrame based on its extension."""
-    if not os.path.isfile(file_path):
-        raise FileNotFoundError(f"File does not exist: {file_path}")
-
-    _, ext = os.path.splitext(file_path)  # Get the file extension
-
-    ext = ext.lower()
-    if ext == ".csv":
-        return pd.read_csv(file_path)
-    elif ext == ".json":
-        return pd.read_json(file_path)
-    elif ext in [".xls", ".xlsx"]:
-        return pd.read_excel(file_path)
-    elif ext == ".parquet":
-        return pd.read_parquet(file_path)
-    else:
-        raise ValueError(f"Unsupported file type: {ext}")
+print(f"Running in environment: {ENV}")
 
 
+# Load model data based on environment
+if ENV == "local":
+    from config_local import load_data
+else:
+    from config_azure import load_data
+data = load_data(scenario, survey)
+
+# Process trip mode choice data
+def process_santrips(trip_data):
+    # change airport trip modes to match them to arrival modes
+    trip_data.loc[trip_data['arrival_mode']=='TAXI_LOC1', "trip_mode"] = "TAXI"
+    trip_data.loc[(trip_data['arrival_mode']=='RIDEHAIL_LOC1') 
+                        & (trip_data['trip_mode']== "SHARED2"), "trip_mode"] = "TNC_SINGLE"
+    trip_data.loc[(trip_data['arrival_mode']=='RIDEHAIL_LOC1') 
+                        & (trip_data['trip_mode']== "SHARED3"), "trip_mode"] = "TNC_SHARED"
+
+    # create a generalized primary purpose column
+    trip_data.loc[trip_data['primary_purpose'].str.contains('bus'), "primary_purpose"] = "Business"
+    trip_data.loc[trip_data['primary_purpose'].str.contains('per'), "primary_purpose"] = "Personal"
+    trip_data.loc[trip_data['primary_purpose'].str.contains('ext'), "primary_purpose"] = "External"
+    trip_data.loc[trip_data['primary_purpose'].str.contains('emp'), "primary_purpose"] = "Employee"
+
+    # group by trip mode and primary purpose
+    trip_by_mode = trip_data.groupby(['trip_mode'])['trip_id'].count()
+    trip_by_purpose_mode = trip_data.groupby(['primary_purpose','trip_mode'])['trip_id'].count()
+    purpose_mode_df = trip_by_purpose_mode.unstack(fill_value=0)
+
+    # create total row from trip_by_mode
+    total_trips_row = pd.DataFrame(trip_by_mode).T
+    total_trips_row.index = ['Total']
+
+    # align columns
+    for col in purpose_mode_df.columns:
+        if col not in total_trips_row.columns:
+            total_trips_row[col] = 0
+    total_trips_row = total_trips_row[purpose_mode_df.columns]
+
+    # combine
+    combined_df = pd.concat([purpose_mode_df, total_trips_row])
+
+    # add "Total Trips" column per row
+    combined_df['total_by_purpose'] = combined_df.sum(axis=1)
+
+    return combined_df
+
+# Load trip by mode choice and by primary purpose (i.e., market segment)
+model_santrips = process_santrips(data["final_santrips"])
+survey_santrips = process_santrips(data["survey_santrips"])
+
+# === Bar Chart: trip mode choice and trip by primary purpose ===
+# Create a combined DataFrame for plotting
+def prepare_comparison_df(model_df, survey_df):
+    # remove 'total_by_purpose' column for plotting
+    model = model_df.drop(columns=['total_by_purpose'])
+    survey = survey_df.drop(columns=['total_by_purpose'])
+    # melt both DataFrames
+    model_melt = model.reset_index().melt(id_vars='index', var_name='trip_mode', value_name='model_trips')
+    survey_melt = survey.reset_index().melt(id_vars='index', var_name='trip_mode', value_name='survey_trips')
+    # merge on purpose and trip_mode
+    merged = pd.merge(model_melt, survey_melt, on=['index', 'trip_mode'])
+    merged = merged.rename(columns={'index': 'purpose'})
+    return merged
+
+comparison_df = prepare_comparison_df(model_santrips, survey_santrips)
+
+# Dash app for comparison
 app = dash.Dash(__name__)
-server = app.server  # This is required for Azure deployment
 
-app.layout = html.Div(children=[
-    html.H1("SANDAG CalibViz"),
-    html.P("This is a simple Dash app for calibration visualization."),
-    html.P(f"Model Data Root Directory: {model_data_rootdir}"),
-    
-    # Dropdown for model runs
+app.layout = html.Div([
+    html.H2("Compare Model vs Survey Trips by Mode and Purpose"),
+    html.H3(f"Scenario: {scenario_name}"),
+    html.H3(f"Model: {selected_model}"),
+    html.Label("Primary Purpose:"),
     dcc.Dropdown(
-        id='model-run-dropdown',
-        options=[{'label': run, 'value': run} for run in model_runs_list],
-        value=model_runs_list[0],  # Default value
-        style={'width': '50%'}
+        id='purpose_dropdown',
+        options=[{'label': p, 'value': p} for p in comparison_df['purpose'].unique()],
+        value='Total',  # default value
+        clearable=False,
+        style={
+        'width': '300px',
+        'height': '40px',
+        'margin-bottom': '20px',
+        'position': 'relative',
+        'left': '0px',
+        'top': '0px'
+        }
     ),
-    
-    # Display the histogram of the selected variable
-    dcc.Graph(id='distribution-chart')
+
+    dcc.Graph(id='comparison_bar_chart')
 ])
 
-# Define the callback to handle changes in the dropdown
 @app.callback(
-    Output('distribution-chart', 'figure'),
-    Input('model-run-dropdown', 'value')
+    Output('comparison_bar_chart', 'figure'),
+    Input('purpose_dropdown', 'value')
 )
-def update_chart(selected_model_run):
-    # Read the CSV corresponding to the selected model run
-    try:
-        file_path = os.path.join(model_data_rootdir, selected_model_run, model_data_path, model_data_file) # Full path to file
-        df = load_model_data_file(file_path)
-        
-        if df is None:
-            return {
-                'data': [],
-                'layout': {'title': f"No CSV files found for model run: {selected_model_run}"}
-            }
-        
-        # Assuming the CSV has a column named 'variable_name' (replace with your column name)
-        if 'PopEmpDenPerMi' not in df.columns:
-            return {
-                'data': [],
-                'layout': {'title': f"Column 'PopEmpDenPerMi' not found in the file for model run: {selected_model_run}"}
-            }
-        
-        # Create a histogram using Plotly
-        fig = px.histogram(df, x='PopEmpDenPerMi', title=f"Distribution of 'PopEmpDenPerMi' for {selected_model_run}")
-        return fig
-    except Exception as e:
-        return {
-            'data': [],
-            'layout': {'title': f"Error: {str(e)}"}
-        }
+def update_comparison_chart(selected_purpose):
+    df = comparison_df[comparison_df['purpose'] == selected_purpose]
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=df['trip_mode'],
+        y=df['model_trips'],
+        name='Model'
+    ))
+    fig.add_trace(go.Bar(
+        x=df['trip_mode'],
+        y=df['survey_trips'],
+        name='Survey'
+    ))
+    fig.update_layout(
+        barmode='group',
+        title=f"'{selected_purpose}' Trips by Mode",
+        xaxis_title='Trip Mode',
+        yaxis_title='Number of Trips',
+        xaxis_tickangle=-45
+    )
+    return fig
 
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     app.run(debug=True)
