@@ -18,99 +18,61 @@ if dotenv_path:
     load_dotenv(dotenv_path)
 
 # Detect App environment and read environment variables
-if "DATABRICKS_HOST" in os.environ: # need to change this to match azure environment
-    ENV = "Azure"
+env = os.getenv("ENV")
+
+if env == "Azure":
     scenario_id = os.getenv("DATABRICKS_SERVER_HOSTNAME")
     scenario_id = os.getenv("DATABRICKS_HTTP_PATH")
     scenario_id = os.getenv("DATABRICKS_TOKEN")
-else:
-    ENV = "local"
+elif env == "Local":
     scenario_id = os.getenv("SCENARIO_ID")
-    scenario = os.getenv("SCENARIO_PATH")
+    scenario_path = os.getenv("SCENARIO_PATH")
     survey = os.getenv("SURVEY_PATH")
     selected_model = os.getenv("SELECTED_MODEL")
-    scenario_name = scenario.split('\\')[-1]
-
-print(f"Running in environment: {ENV}")
-
-
-# Load model data based on environment
-if ENV == "local":
-    from config_local import load_data
+    scenario_name = scenario_path.split('\\')[-1]
 else:
-    from config_azure import load_data
-data = load_data(scenario, survey)
+    raise ValueError("Environment variable 'ENV' must be set to either 'Azure' or 'Local'.")
+print(f"Running in environment: {env}")
+
+# Load survey and model data based on environment
+from config import load_survey_data, load_model_data
+model_data = load_model_data(scenario_id, scenario_path, selected_model, env)
+survey_data = load_survey_data()
 
 # Process trip mode choice data
 def process_santrips(trip_data):
-    # change airport trip modes to match them to arrival modes
-    trip_data.loc[trip_data['arrival_mode']=='TAXI_LOC1', "trip_mode"] = "TAXI"
-    trip_data.loc[(trip_data['arrival_mode']=='RIDEHAIL_LOC1') 
-                        & (trip_data['trip_mode']== "SHARED2"), "trip_mode"] = "TNC_SINGLE"
-    trip_data.loc[(trip_data['arrival_mode']=='RIDEHAIL_LOC1') 
-                        & (trip_data['trip_mode']== "SHARED3"), "trip_mode"] = "TNC_SHARED"
-
-    # create a generalized primary purpose column
-    trip_data.loc[trip_data['primary_purpose'].str.contains('bus'), "primary_purpose"] = "Business"
-    trip_data.loc[trip_data['primary_purpose'].str.contains('per'), "primary_purpose"] = "Personal"
-    trip_data.loc[trip_data['primary_purpose'].str.contains('ext'), "primary_purpose"] = "External"
-    trip_data.loc[trip_data['primary_purpose'].str.contains('emp'), "primary_purpose"] = "Employee"
-
-    # group by trip mode and primary purpose
-    trip_by_mode = trip_data.groupby(['trip_mode'])['trip_id'].count()
-    trip_by_purpose_mode = trip_data.groupby(['primary_purpose','trip_mode'])['trip_id'].count()
-    purpose_mode_df = trip_by_purpose_mode.unstack(fill_value=0)
+    # group by trip mode and tour type
+    trip_by_mode = trip_data.groupby(['trip_mode','tour_type'])['weight_person_trip'].sum().reset_index()
 
     # create total row from trip_by_mode
-    total_trips_row = pd.DataFrame(trip_by_mode).T
-    total_trips_row.index = ['Total']
+    trip_mode_totals = trip_by_mode.groupby('trip_mode')['weight_person_trip'].sum().reset_index()
+    trip_mode_totals['tour_type'] = 'Total'
+    trip_by_mode_with_total = pd.concat([trip_by_mode, trip_mode_totals], ignore_index=True)
 
-    # align columns
-    for col in purpose_mode_df.columns:
-        if col not in total_trips_row.columns:
-            total_trips_row[col] = 0
-    total_trips_row = total_trips_row[purpose_mode_df.columns]
-
-    # combine
-    combined_df = pd.concat([purpose_mode_df, total_trips_row])
-
-    # add "Total Trips" column per row
-    combined_df['total_by_purpose'] = combined_df.sum(axis=1)
-
-    return combined_df
+    return trip_by_mode_with_total
 
 # Load trip by mode choice and by primary purpose (i.e., market segment)
-model_santrips = process_santrips(data["final_santrips"])
-survey_santrips = process_santrips(data["survey_santrips"])
+model_santrips = process_santrips(model_data["santrips"])
+survey_santrips = process_santrips(survey_data["santrips"])
+
+# Merge the two DataFrames
+merged_df = model_santrips.merge(survey_santrips, on=['trip_mode', 'tour_type'], suffixes=('_model', '_survey'))
 
 # === Bar Chart: trip mode choice and trip by primary purpose ===
-# Create a combined DataFrame for plotting
-def prepare_comparison_df(model_df, survey_df):
-    # remove 'total_by_purpose' column for plotting
-    model = model_df.drop(columns=['total_by_purpose'])
-    survey = survey_df.drop(columns=['total_by_purpose'])
-    # melt both DataFrames
-    model_melt = model.reset_index().melt(id_vars='index', var_name='trip_mode', value_name='model_trips')
-    survey_melt = survey.reset_index().melt(id_vars='index', var_name='trip_mode', value_name='survey_trips')
-    # merge on purpose and trip_mode
-    merged = pd.merge(model_melt, survey_melt, on=['index', 'trip_mode'])
-    merged = merged.rename(columns={'index': 'purpose'})
-    return merged
-
-comparison_df = prepare_comparison_df(model_santrips, survey_santrips)
-
-# Dash app for comparison
+# Create app
 app = dash.Dash(__name__)
+app.title = "CalibViz"
 
+# Set the external stylesheets for Dash Bootstrap Components
 app.layout = html.Div([
-    html.H2("Compare Model vs Survey Trips by Mode and Purpose"),
+    html.H2("Comparison of Model vs. Survey Person Trips by Mode"),
     html.H3(f"Scenario: {scenario_name}"),
     html.H3(f"Model: {selected_model}"),
-    html.Label("Primary Purpose:"),
+    html.Label("Select Tour Type:"),
     dcc.Dropdown(
-        id='purpose_dropdown',
-        options=[{'label': p, 'value': p} for p in comparison_df['purpose'].unique()],
-        value='Total',  # default value
+        id='tour-type-dropdown',
+        options=[{'label': t, 'value': t} for t in merged_df['tour_type'].unique()],
+        value='Total',  # default selection
         clearable=False,
         style={
         'width': '300px',
@@ -121,33 +83,27 @@ app.layout = html.Div([
         'top': '0px'
         }
     ),
-
-    dcc.Graph(id='comparison_bar_chart')
+    dcc.Graph(id='bar-chart')
 ])
 
 @app.callback(
-    Output('comparison_bar_chart', 'figure'),
-    Input('purpose_dropdown', 'value')
+    Output('bar-chart', 'figure'),
+    Input('tour-type-dropdown', 'value')
 )
-def update_comparison_chart(selected_purpose):
-    df = comparison_df[comparison_df['purpose'] == selected_purpose]
-    fig = go.Figure()
-    fig.add_trace(go.Bar(
-        x=df['trip_mode'],
-        y=df['model_trips'],
-        name='Model'
-    ))
-    fig.add_trace(go.Bar(
-        x=df['trip_mode'],
-        y=df['survey_trips'],
-        name='Survey'
-    ))
-    fig.update_layout(
-        barmode='group',
-        title=f"'{selected_purpose}' Trips by Mode",
-        xaxis_title='Trip Mode',
-        yaxis_title='Number of Trips',
-        xaxis_tickangle=-45
+def update_bar_chart(selected_tour_type):
+    filtered_df = merged_df[merged_df['tour_type'] == selected_tour_type]
+    fig = px.bar(
+        filtered_df.melt(
+            id_vars="trip_mode",
+            value_vars=["weight_person_trip_model", "weight_person_trip_survey"],
+            var_name="Source",
+            value_name="Trips"
+        ),
+        x="trip_mode",
+        y="Trips",
+        color="Source",
+        barmode="group",
+        title=f"Model vs Survey Weighted Person Trips by Mode ({selected_tour_type})"
     )
     return fig
 
