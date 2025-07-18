@@ -74,10 +74,10 @@ def load_model_data(scenario_id, scenario_path, selected_model, env):
                                 'KNR_LOC': 'public_transit',
                                 'KNR_MIX': 'public_transit',
                                 'KNR_PRM': 'public_transit',
-                                'PARK_ESCORT': 'park_escort',
-                                'PARK_LOC1': 'park_on_site',
-                                'PARK_LOC4': 'park_off_site',
-                                'PARK_LOC5': 'park_off_site',
+                                'PARK_ESCORT': 'park_escort',   # not in survey data
+                                'PARK_LOC1': 'parked_on_site',  # park_on_site not in survey data
+                                'PARK_LOC4': 'parked_off_site', # park_off_site not in survey data
+                                'PARK_LOC5': 'parked_off_site', # park_off_site not in survey data
                                 'RENTAL': 'rental_car',
                                 'RIDEHAIL_LOC1': 'tnc',
                                 'SHUTTLEVAN': 'shuttle',

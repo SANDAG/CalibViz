@@ -45,16 +45,17 @@ def process_santrips(trip_data, aggregator):
     # replace 'tnc' arrival mode to 'public_transit' in both model and survey data
     trip_data['arrival_mode'] = trip_data['arrival_mode'].replace({'tnc': 'public_transit'})
 
-    # group by trip mode and tour type
+    # group by user-input aggregator (e.g., arrival_mode) and tour type and calculate percentage of trips by tour type
     trip_by_mode = trip_data.groupby([aggregator,'tour_type'])['weight_person_trip'].sum().reset_index()
+    trip_by_mode['trip_pct'] = trip_by_mode['weight_person_trip'] / trip_by_mode.groupby('tour_type')['weight_person_trip'].transform('sum') * 100
     
-    # create total row from trip_by_mode
+    # create total row from trip_by_mode and calculate percentage of trips
     trip_mode_totals = trip_by_mode.groupby(aggregator)['weight_person_trip'].sum().reset_index()
     trip_mode_totals['tour_type'] = 'Total'
-    trip_by_mode_with_total = pd.concat([trip_by_mode, trip_mode_totals], ignore_index=True)
+    trip_mode_totals['trip_pct'] = trip_mode_totals['weight_person_trip'] / trip_mode_totals['weight_person_trip'].sum() * 100
 
-    # calculate percentage of trips
-    trip_by_mode_with_total['trip_pct'] = trip_by_mode_with_total['weight_person_trip'] / trip_by_mode_with_total['weight_person_trip'].sum() * 100
+    # concatenate the total row to the trip_by_mode DataFrame
+    trip_by_mode_with_total = pd.concat([trip_by_mode, trip_mode_totals], ignore_index=True)
 
     return trip_by_mode_with_total
 
