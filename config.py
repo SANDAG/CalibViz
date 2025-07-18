@@ -4,6 +4,9 @@ from dotenv import load_dotenv, find_dotenv
 from databricks import sql
 import pandas as pd
 
+import warnings
+warnings.filterwarnings("ignore")
+
 # Utility functions
 # Configure Azure Databricks connection
 def get_connection():
