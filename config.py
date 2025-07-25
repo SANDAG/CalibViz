@@ -67,6 +67,13 @@ def load_model_data(scenario_id, scenario_path, selected_model, env):
                             }
         df1['tour_type'] = df1['tour_type'].replace(tour_types_mapping)
 
+        # match model airport trip modes to arrival modes
+        df1.loc[df1['arrival_mode']=='TAXI_LOC1', "trip_mode"] = "TAXI"
+        df1.loc[(df1['arrival_mode']=='RIDEHAIL_LOC1') 
+                & (df1['trip_mode']== "SHARED2"), "trip_mode"] = "TNC_SINGLE"
+        df1.loc[(df1['arrival_mode']=='RIDEHAIL_LOC1') 
+                & (df1['trip_mode']== "SHARED3"), "trip_mode"] = "TNC_SHARED"
+
         # map model arrival modes to survey modes
         arrival_mode_mapping = {
                                 'CURB_LOC1': 'drop_off',
@@ -74,14 +81,14 @@ def load_model_data(scenario_id, scenario_path, selected_model, env):
                                 'KNR_LOC': 'public_transit',
                                 'KNR_MIX': 'public_transit',
                                 'KNR_PRM': 'public_transit',
-                                'PARK_ESCORT': 'park_escort',   # not in survey data
-                                'PARK_LOC1': 'parked_on_site',  # park_on_site not in survey data
-                                'PARK_LOC4': 'parked_off_site', # park_off_site not in survey data
-                                'PARK_LOC5': 'parked_off_site', # park_off_site not in survey data
+                                'PARK_ESCORT': 'drop_off',
+                                'PARK_LOC1': 'parked_on_site',
+                                'PARK_LOC4': 'parked_off_site',
+                                'PARK_LOC5': 'parked_off_site',
                                 'RENTAL': 'rental_car',
-                                'RIDEHAIL_LOC1': 'tnc',
+                                'TAXI_LOC1':'taxi',
+                                'RIDEHAIL_LOC1':'tnc',
                                 'SHUTTLEVAN': 'shuttle',
-                                'TAXI_LOC1': 'taxi',
                                 'TNC_LOC': 'public_transit',
                                 'TNC_MIX': 'public_transit',
                                 'TNC_PRM': 'public_transit',
@@ -90,16 +97,7 @@ def load_model_data(scenario_id, scenario_path, selected_model, env):
                                 'WALK_MIX': 'public_transit',
                                 'WALK_PRM': 'public_transit'
                                 }
-
         df1['arrival_mode'] = df1['arrival_mode'].replace(arrival_mode_mapping)
-
-        # change airport trip modes to match them to arrival modes
-        df1.loc[df1['arrival_mode']=='taxi', "trip_mode"] = "TAXI"
-        df1.loc[(df1['arrival_mode']=='tnc') 
-                & (df1['trip_mode']== "SHARED2"), "trip_mode"] = "TNC_SINGLE"
-        df1.loc[(df1['arrival_mode']=='tnc') 
-                & (df1['trip_mode']== "SHARED3"), "trip_mode"] = "TNC_SHARED"
-        
         
         return {
             "santrips": df1,

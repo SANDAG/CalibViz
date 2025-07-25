@@ -42,41 +42,76 @@ survey_data = load_survey_data()
 
 # Process trip mode choice data
 def process_santrips(trip_data, aggregator):
-    # replace 'tnc' arrival mode to 'public_transit' in both model and survey data
-    trip_data['arrival_mode'] = trip_data['arrival_mode'].replace({'tnc': 'public_transit'})
+    # map model and survey arrival mode to WSP mode split
+    arrival_mode_to_wsp = {
+            "drop_off": "Drop-off/Pick up",
+            "shuttle": "Shared Shuttle Van",
+            "public_transit": "Public Transportation",
+            "park_escort": "Drop-off/Pick up",
+            "parked_on_site":"Personal Car Parked",
+            "parked_off_site":"Personal Car Parked",
+            'parked_employee':"Personal Car Parked",
+            'parked_unknown':"Personal Car Parked",
+            "rental_car":"Rental Car",
+            "tnc":"UBER/Lyft",
+            "taxi":"Taxi",
+            "active_transportation":"Walk"
+    }
+    trip_data['arrival_mode'] = trip_data['arrival_mode'].replace(arrival_mode_to_wsp)
 
+    """
+    Group the trip data by the specified aggregator (e.g., arrival_mode) and tour type
+    """
     # group by user-input aggregator (e.g., arrival_mode) and tour type and calculate percentage of trips by tour type
     trip_by_mode = trip_data.groupby([aggregator,'tour_type'])['weight_person_trip'].sum().reset_index()
     trip_by_mode['trip_pct'] = trip_by_mode['weight_person_trip'] / trip_by_mode.groupby('tour_type')['weight_person_trip'].transform('sum') * 100
-    
+
     # create total row from trip_by_mode and calculate percentage of trips
     trip_mode_totals = trip_by_mode.groupby(aggregator)['weight_person_trip'].sum().reset_index()
     trip_mode_totals['tour_type'] = 'Total'
     trip_mode_totals['trip_pct'] = trip_mode_totals['weight_person_trip'] / trip_mode_totals['weight_person_trip'].sum() * 100
 
     # concatenate the total row to the trip_by_mode DataFrame
-    trip_by_mode_with_total = pd.concat([trip_by_mode, trip_mode_totals], ignore_index=True)
+    trip_by_tour_mode = pd.concat([trip_by_mode, trip_mode_totals], ignore_index=True)
 
-    return trip_by_mode_with_total
+    # create a new column for the general tour type
+    trip_by_tour_mode['tour_type_general'] = trip_by_tour_mode['tour_type'].apply(
+    lambda x: 'resident' if str(x).startswith('res_') else
+              'visitor' if str(x).startswith('vis_') else
+              'employee' if str(x).startswith('emp') else
+              'Total' if str(x) == 'Total' else
+              x
+    )
+    
+    return trip_by_tour_mode
 
-# Load trip by mode choice and by primary purpose (i.e., market segment)
+# Load trip by arrival mode and by tour type (i.e., market segment)
 aggregator = 'arrival_mode'
 model_santrips = process_santrips(model_data["santrips"], aggregator)
 survey_santrips = process_santrips(survey_data["santrips"], aggregator)
 
-# Merge the two DataFrames
-merged_df = model_santrips.merge(survey_santrips, on=[aggregator, 'tour_type'], suffixes=('_model', '_survey'))
+# Merge the two DataFrames and maintain aggrator columns from survey data
+merged_df = model_santrips.merge(survey_santrips, on=[aggregator, 'tour_type'], how='right', suffixes=('_model', '_survey'))
 
-# === Bar Chart: trip mode choice and trip by tour type ===
+# Create merged DataFrame for trip mode by general tour type
+merged_df_general = merged_df.groupby(['tour_type_general_survey'])[['weight_person_trip_model','weight_person_trip_survey']].sum().reset_index()
+merged_df_general['trip_pct_model'] =  merged_df_general['weight_person_trip_model'] / merged_df_general.query("tour_type_general_survey != 'Total'")['weight_person_trip_model'].sum() * 100
+merged_df_general['trip_pct_survey'] =  merged_df_general['weight_person_trip_survey'] / merged_df_general.query("tour_type_general_survey != 'Total'")['weight_person_trip_survey'].sum() * 100
+
+
+
+
+
+
 # Create app
 app = dash.Dash(__name__)
 app.title = "CalibViz"
 
 # Add a button to switch between percentage and weighted person trips in the bar chart
 app.layout = html.Div([
-    html.H2("Comparison of Model vs. Survey Person Trips by Mode"),
-    html.H3(f"Scenario: {scenario_name}"),
-    html.H3(f"Model: {selected_model}"),
+    html.H2("SANDAG ABM Calibration Visualizer"),
+    html.H3(f"Scenario: {scenario_name}", style={"margin-right": "40px", "display": "inline-block"}),
+    html.H3(f"Model: {selected_model}", style={"display": "inline-block"}),
     html.Label("Select Tour Type:"),
     dcc.Dropdown(
         id='tour-type-dropdown',
@@ -134,5 +169,44 @@ def update_bar_chart(selected_tour_type, n_clicks):
     )
     return fig, btn_text
 
+# Add a card to display weighted person trips and trip_pct by tour type and total
+def generate_summary_card(df):
+    
+    # Define a common style for all cells
+    cell_style = {"padding": "8px 20px", "minWidth": "120px", "textAlign": "right", 'border': '1px solid black'}
+
+    rows = []
+    for _, row in df.iterrows():
+        rows.append(html.Tr([
+            html.Td(row['tour_type_general_survey'], style=cell_style),
+            html.Td(f"{row['weight_person_trip_model']:.1f}", style=cell_style),
+            html.Td(f"{row['trip_pct_model']:.2f}%", style=cell_style),
+            html.Td(f"{row['weight_person_trip_survey']:.1f}", style=cell_style),
+            html.Td(f"{row['trip_pct_survey']:.2f}%", style=cell_style)
+        ]))
+    table = dbc.Table([
+        html.Thead(html.Tr([
+            html.Th("Tour Type", style=cell_style),
+            html.Th("Model Weighted Trips", style=cell_style),
+            html.Th("Model Trip %", style=cell_style),
+            html.Th("Survey Weighted Trips", style=cell_style),
+            html.Th("Survey Trip %", style=cell_style)
+        ])),
+        html.Tbody(rows)
+    ], bordered=True, striped=True, hover=True, size="sm", style={'border': '1px solid black', 'borderCollapse': 'collapse'})
+    card = dbc.Card([
+        dbc.CardHeader(
+            "Trip Summary by Departing Air Passenger Market",
+            style={"fontWeight": "bold"}
+        ),
+        dbc.CardBody(table)
+    ], style={"margin-bottom": "20px"})
+    return card
+
+summary_card = generate_summary_card(merged_df_general)
+
+# Insert the card into the app layout (before the dropdown)
+app.layout.children.insert(3, summary_card)
+
 if __name__ == '__main__':
-    app.run(debug=True, port=8051)
+    app.run(debug=True, port=8050)
