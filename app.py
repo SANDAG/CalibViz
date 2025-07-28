@@ -50,8 +50,8 @@ def process_santrips(trip_data, aggregator):
             "park_escort": "Drop-off/Pick up",
             "parked_on_site":"Personal Car Parked",
             "parked_off_site":"Personal Car Parked",
-            'parked_employee':"Personal Car Parked",
-            'parked_unknown':"Personal Car Parked",
+            # 'parked_employee':"Personal Car Parked",  # ignore employee trips for now
+            # 'parked_unknown':"Personal Car Parked",   # ignore employee trips for now
             "rental_car":"Rental Car",
             "tnc":"UBER/Lyft",
             "taxi":"Taxi",
