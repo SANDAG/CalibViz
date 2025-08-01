@@ -42,6 +42,9 @@ survey_data = load_survey_data()
 
 # Process trip mode choice data
 def process_santrips(trip_data, aggregator):
+    # ignore employee trips
+    trip_data = trip_data.loc[trip_data['tour_type'] != 'emp'].copy()
+
     # map model and survey arrival mode to WSP mode split
     arrival_mode_to_wsp = {
             "drop_off": "Drop-off/Pick up",
@@ -50,8 +53,8 @@ def process_santrips(trip_data, aggregator):
             "park_escort": "Drop-off/Pick up",
             "parked_on_site":"Personal Car Parked",
             "parked_off_site":"Personal Car Parked",
-            # 'parked_employee':"Personal Car Parked",  # ignore employee trips for now
-            # 'parked_unknown':"Personal Car Parked",   # ignore employee trips for now
+            # 'parked_employee':"Personal Car Parked",  # ignore employee trips
+            # 'parked_unknown':"Personal Car Parked",   # ignore employee trips
             "rental_car":"Rental Car",
             "tnc":"UBER/Lyft",
             "taxi":"Taxi",
@@ -82,7 +85,7 @@ def process_santrips(trip_data, aggregator):
               'Total' if str(x) == 'Total' else
               x
     )
-    
+
     return trip_by_tour_mode
 
 # Load trip by arrival mode and by tour type (i.e., market segment)
@@ -209,4 +212,4 @@ summary_card = generate_summary_card(merged_df_general)
 app.layout.children.insert(3, summary_card)
 
 if __name__ == '__main__':
-    app.run(debug=True, port=8050)
+    app.run(debug=True, port=8052)

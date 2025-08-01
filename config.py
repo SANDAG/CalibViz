@@ -29,7 +29,7 @@ conn = get_connection()
 # Load survey data
 def load_survey_data():
      sd1 = read_table(f"""SELECT * FROM read_files('/Volumes/survey/sdia25/calibration/departing_trips_by_mode.csv')""", conn).drop('_rescued_data', axis=1)
-     sd1 = sd1.rename(columns={'airport_access_mode':'arrival_mode', 'respondent_type':'primary_purpose', 'inbound_bool':'inbound', 'person_weight':'weight_person_trip'})
+     sd1 = sd1.rename(columns={'airport_access_mode':'arrival_mode', 'respondent_type':'primary_purpose', 'inbound_bool':'inbound', 'person_trips':'weight_person_trip'})
 
      return {
             "santrips": sd1
