@@ -1,46 +1,50 @@
 import os
 import pandas as pd
-import dash
-from dash import Dash, html, dash_table, dcc
-from dash import Input, Output, State
-import plotly.express as px
-import dash_leaflet as dl
 import numpy as np
-import plotly.graph_objects as go
-from dash import callback_context
+import dash
+from dash import dcc, html, dash_table, Dash, Input, Output, State, callback_context
+from dash.exceptions import PreventUpdate
 import dash_bootstrap_components as dbc
+import dash_leaflet as dl
+import plotly.express as px
+import plotly.graph_objects as go
 from dotenv import load_dotenv, find_dotenv
+from config import load_survey_data, load_model_data
 
 
-
-# Load .env file
+# === Detect App environment and read environment variables ===
 dotenv_path = find_dotenv()
 if dotenv_path:
     load_dotenv(dotenv_path)
-
-# Detect App environment and read environment variables
 env = os.getenv("ENV")
-
 if env == "Azure":
-    scenario_id = os.getenv("DATABRICKS_SERVER_HOSTNAME")
-    scenario_id = os.getenv("DATABRICKS_HTTP_PATH")
-    scenario_id = os.getenv("DATABRICKS_TOKEN")
+    server_hostname = os.getenv("DATABRICKS_SERVER_HOSTNAME")
+    http_path = os.getenv("DATABRICKS_HTTP_PATH")
+    access_token = os.getenv("DATABRICKS_TOKEN")
 elif env == "Local":
-    scenario_id = os.getenv("SCENARIO_ID")
-    scenario_path = os.getenv("SCENARIO_PATH")
+    scenario_list_str = os.getenv("SCENARIO_LIST")
     survey = os.getenv("SURVEY_PATH")
     selected_model = os.getenv("SELECTED_MODEL")
-    scenario_name = scenario_path.split('\\')[-1]
 else:
     raise ValueError("Environment variable 'ENV' must be set to either 'Azure' or 'Local'.")
 print(f"Running in environment: {env}")
 
-# Load survey and model data based on environment
-from config import load_survey_data, load_model_data
-model_data = load_model_data(scenario_id, scenario_path, selected_model, env)
+
+# === Load survey and model data ===
+# load survey data from Databricks
 survey_data = load_survey_data()
 
-# Process trip mode choice data
+# load model data from input environment
+if env == "Azure":
+    pass    #need to update later
+else:
+    # get scenario dictionary and save metadata and model data for each scenario
+    scenario_list = scenario_list_str.split(",") if scenario_list_str else []
+    scenario_dict = {path : {} for path in scenario_list}
+    model_data = load_model_data(scenario_dict, selected_model, env)
+
+
+# === Process airport trip mode choice data ===
 def process_santrips(trip_data, aggregator, emp):
     # ignore employee trips if emp is set to False
     if emp == False:
@@ -135,196 +139,333 @@ def process_santrips(trip_data, aggregator, emp):
     else:
         return trip_by_dTour_aggMode
 
+    
+
 def merge_summarized_trip_data(model, survey, aggregator2):
     return model.merge(survey, on=aggregator2, how='right', suffixes=('_model', '_survey'))
 
-# Load trip by arrival mode and by tour type (i.e., market segment)
+
+# Define result dictionary, aggregation, and employee trip inclusion
+santrips_dict = {}
 aggregator = 'arrival_mode'
 emp = False  # Set to True to include employee trips
-model_santrips, ge_model_santrips = process_santrips(model_data["santrips"], aggregator, emp)
+
+# Process survey data
+# load trip by arrival mode and by tour type (i.e., market segment)
 survey_santrips, ge_survey_santrips = process_santrips(survey_data["santrips"], aggregator, emp)
-model_emp_santrips = process_santrips(model_data["santrips"], aggregator, True)
 survey_emp_santrips = process_santrips(survey_data["santrips"], aggregator, True)
 
-# Cet merged DataFrames for trip w/wo employee trips by arrival mode and by tour type (i.e., market segment)
-merge_df = merge_summarized_trip_data(model_santrips, survey_santrips, ['tour_type', aggregator])
-merge_df_general = merge_summarized_trip_data(ge_model_santrips, ge_survey_santrips, ['tour_type_general', aggregator])
-merge_df_emp = merge_summarized_trip_data(model_emp_santrips, survey_emp_santrips, ['tour_type', aggregator])
+# Process model data and merge with survey data
+for path, data in model_data.items():
+    # get scenario name and id
+    scenario_name = str(data['metadata']['scenario_id']) + ': ' + data['metadata']['scenario_name']
 
+    # load trip by arrival mode and by tour type (i.e., market segment)
+    model_santrips, ge_model_santrips = process_santrips(data["santrips"], aggregator, emp)
+    model_emp_santrips = process_santrips(data["santrips"], aggregator, True)
 
-# Create app with pages enabled
-app = dash.Dash(__name__, suppress_callback_exceptions=True)
+    # get merged DataFrames for trip w/wo employee trips by arrival mode and by tour type (i.e., market segment)
+    merge_df = merge_summarized_trip_data(model_santrips, survey_santrips, ['tour_type', aggregator])
+    merge_df_general = merge_summarized_trip_data(ge_model_santrips, ge_survey_santrips, ['tour_type_general', aggregator])
+    merge_df_emp = merge_summarized_trip_data(model_emp_santrips, survey_emp_santrips, ['tour_type', aggregator])
+
+    # store merged DataFrames in the dictionary
+    santrips_dict[scenario_name] = {
+        "model": "airport.SAN",
+        "merge_df": merge_df,
+        "merge_df_general": merge_df_general,
+        "merge_df_emp": merge_df_emp
+    }
+
+# === Establish Dash App ===
+# Ensure necessary data exist
+try:
+    santrips_dict
+except NameError:
+    print("santrips_dict not found")
+
+# Scenario list for the navbar dropdown
+scenarios = sorted(santrips_dict.keys())
+default_scenario = scenarios[0] if scenarios else None
+
+# Common category order for plots
+X_ORDER = [
+    'Drop-off/Pick up', 'UBER/Lyft', 'Taxi', 'Personal Car Parked',
+    'Shared Shuttle Van', 'Rental Car', 'Walk', 'Public Transportation'
+]
+
+# --- App ---
+app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP], suppress_callback_exceptions=True)
 app.title = "CalibViz"
 
-# === NAVIGATION BAR ===
+# --- Navbar with Scenario dropdown ---
 def get_navbar():
-    return html.Div([
-        # === SANDAG Logo ===
-        html.Img(
-            src='/assets/sandag-logo.png',
-            style={
-                'height': '40px',
-                'marginLeft': 'auto',
-                'marginRight': '20px'
-            }
-        ),
-        html.Div("ABM3 Calibration Visualizer", style={
-            'fontSize': '22px',
-            'fontWeight': 'bold',
-            'flex': '1',
-            'alignSelf': 'center'
-        }),
-        dbc.ButtonGroup([
-            dcc.Link(dbc.Button("Aggregated Tour Type", color="primary", outline=True, size="sm"), href="/"),
-            dcc.Link(dbc.Button("Disaggregated Tour Type", color="primary", outline=True, size="sm"), href="/tour-type-page"),
-            dcc.Link(dbc.Button("Employee Trips", color="primary", outline=True, size="sm"), href="/employee-tour-type-page"),
-        ])
-    ], style={
-        'display': 'flex',
-        'justifyContent': 'space-between',
-        'alignItems': 'center',
-        'padding': '10px 20px',
-        'backgroundColor': "#4c6f92",
-        'borderBottom': '1px solid #dee2e6'
-    })
+    return html.Div(
+        [
+            html.Img(src='/assets/sandag-logo.png',
+                     style={'height': '40px', 'marginLeft': 'auto', 'marginRight': '20px'}),
+            html.Div("ABM3 Calibration Visualizer",
+                     style={'fontSize': '22px', 'fontWeight': 'bold', 'flex': '1', 'alignSelf': 'center'}),
+            html.Div(
+                [
+                    html.Label("Scenario", style={'color': 'white', 'marginRight': '8px'}),
+                    dcc.Dropdown(
+                        id='scenario-dd',
+                        options=[{'label': s, 'value': s} for s in scenarios],
+                        value=default_scenario,
+                        clearable=False,
+                        style={'width': '280px'}
+                    )
+                ],
+                style={'display': 'flex', 'alignItems': 'center', 'gap': '8px',
+                       'marginRight': '20px', 'minWidth': '300px'}
+            ),
+            dbc.ButtonGroup(
+                [
+                    dcc.Link(dbc.Button("Aggregated Tour Type", color="primary", outline=True, size="sm", style={'color': 'white'}), href="/"),
+                    dcc.Link(dbc.Button("Disaggregated Tour Type", color="primary", outline=True, size="sm", style={'color': 'white'}), href="/tour-type-page"),
+                    dcc.Link(dbc.Button("Employee Trips", color="primary", outline=True, size="sm", style={'color': 'white'}), href="/employee-tour-type-page"),
+                ]
+            )
+        ],
+        style={'display': 'flex', 'justifyContent': 'space-between', 'alignItems': 'center',
+               'padding': '10px 20px', 'backgroundColor': "#4c6f92", 'borderBottom': '1px solid #dee2e6'}
+    )
 
+# --- Summary Card ---
+def generate_summary_card(df: pd.DataFrame):
+    if df is None or df.empty:
+        return dbc.Alert("No data for this scenario.", color="warning", className="mt-2")
 
+    # Aggregate and compute percentages robustly
+    tbl = df.groupby('tour_type_general')[['trip_by_mode_model', 'trip_by_mode_survey']].sum().reset_index()
+    tot_model = float(tbl['trip_by_mode_model'].sum())
+    tot_survey = float(tbl['trip_by_mode_survey'].sum())
+    tbl['trip_pct_model'] = (tbl['trip_by_mode_model'] / (tot_model if tot_model else 1.0)) * 100.0
+    tbl['trip_pct_survey'] = (tbl['trip_by_mode_survey'] / (tot_survey if tot_survey else 1.0)) * 100.0
 
-# === Summary Card ===
-def generate_summary_card(df):
-    # Create summary table
-    df = df.groupby('tour_type_general')[['trip_by_mode_model','trip_by_mode_survey']].sum().reset_index()
-    df['trip_pct_model'] = df['trip_by_mode_model'] / df['trip_by_mode_model'].iloc[0] * 100
-    df['trip_pct_survey'] = df['trip_by_mode_survey'] / df['trip_by_mode_survey'].iloc[0] * 100
-    
-    # Define a common style for all cells
     cell_style = {"padding": "8px 20px", "minWidth": "120px", "textAlign": "right", 'border': '1px solid black'}
 
     rows = []
-    for _, row in df.iterrows():
-        rows.append(html.Tr([
-            html.Td(row['tour_type_general'], style=cell_style),
-            html.Td(f"{row['trip_by_mode_model']:.1f}", style=cell_style),
-            html.Td(f"{row['trip_pct_model']:.2f}%", style=cell_style),
-            html.Td(f"{row['trip_by_mode_survey']:.1f}", style=cell_style),
-            html.Td(f"{row['trip_pct_survey']:.2f}%", style=cell_style)
-        ]))
-    table = dbc.Table([
-        html.Thead(html.Tr([
-            html.Th("Tour Type", style=cell_style),
-            html.Th("Model Weighted Trips", style=cell_style),
-            html.Th("Model Trip %", style=cell_style),
-            html.Th("Survey Weighted Trips", style=cell_style),
-            html.Th("Survey Trip %", style=cell_style)
-        ])),
-        html.Tbody(rows)
-    ], bordered=True, striped=True, hover=True, size="sm", style={'border': '1px solid black', 'borderCollapse': 'collapse'})
-    card = dbc.Card([
-        dbc.CardHeader(
-            "Trip Summary by Departing Air Passenger Market",
-            style={"fontWeight": "bold"}
-        ),
-        dbc.CardBody(table)
-    ], style={"margin-bottom": "20px"})
-    return card
+    for _, row in tbl.iterrows():
+        rows.append(
+            html.Tr(
+                [
+                    html.Td(row['tour_type_general'], style=cell_style),
+                    html.Td(f"{row['trip_by_mode_model']:.1f}", style=cell_style),
+                    html.Td(f"{row['trip_pct_model']:.2f}%", style=cell_style),
+                    html.Td(f"{row['trip_by_mode_survey']:.1f}", style=cell_style),
+                    html.Td(f"{row['trip_pct_survey']:.2f}%", style=cell_style),
+                ]
+            )
+        )
 
-# === PAGE 1: Aggregated Tour Type Page ===
-summary_layout = html.Div([
-    get_navbar(),
-    html.Div([
-        html.H3(f"Scenario: {scenario_name}", style={"marginRight": "40px", "display": "inline-block"}),
-        html.H3(f"Model: {selected_model}", style={"display": "inline-block"}),
+    table = dbc.Table(
+        [
+            html.Thead(
+                html.Tr(
+                    [
+                        html.Th("Tour Type", style=cell_style),
+                        html.Th("Model Weighted Trips", style=cell_style),
+                        html.Th("Model Trip %", style=cell_style),
+                        html.Th("Survey Weighted Trips", style=cell_style),
+                        html.Th("Survey Trip %", style=cell_style),
+                    ]
+                )
+            ),
+            html.Tbody(rows),
+        ],
+        bordered=True, striped=True, hover=True, size="sm",
+        style={'border': '1px solid black', 'borderCollapse': 'collapse'}
+    )
 
-        generate_summary_card(merge_df_general),
+    return dbc.Card(
+        [
+            dbc.CardHeader("Trip Summary by Departing Air Passenger Market", style={"fontWeight": "bold"}),
+            dbc.CardBody(table)
+        ],
+        style={"margin-bottom": "20px"}
+    )
 
-        html.Label("Select Aggregated Tour Type:"),
-        dcc.Dropdown(
-            id='general-tour-type-dropdown',
-            options=[{'label': t, 'value': t} for t in merge_df_general['tour_type_general'].unique()],
-            value='Total',
-            clearable=False,
-            style={'width': '300px', 'margin-bottom': '20px'}
-        ),
+# --- Pages ---
+summary_layout = html.Div(
+    [
+        get_navbar(),
+        html.Div(
+            [
+                html.H3(id="summary-scenario-title", style={"marginRight": "40px", "display": "inline-block"}),
+                html.H3(id="summary-model-title", style={"display": "inline-block"}),
+                html.Div(id="summary-card", style={"marginBottom": "20px"}),
 
-        html.Button("Show Weighted Person Trips", id='toggle-btn', n_clicks=0, style={'margin-bottom': '20px'}),
-        dcc.Graph(id='general-bar-chart')
-    ], style={'padding': '20px'})
-])
+                html.Label("Select Aggregated Tour Type:"),
+                dcc.Dropdown(id='general-tour-type-dropdown', options=[], value=None, clearable=False,
+                             style={'width': '300px', 'margin-bottom': '20px'}),
 
-# === PAGE 2: Disaggregated Tour Type Chart Page ===
-tour_type_layout = html.Div([
-    get_navbar(),
-    html.Div([
-        html.H3(f"Scenario: {scenario_name}", style={"marginRight": "40px", "display": "inline-block"}),
-        html.H3(f"Model: {selected_model}", style={"display": "inline-block"}),
-        html.Br(),
-        html.Label("Select Disaggregated Tour Type:"),
-        dcc.Dropdown(
-            id='tour-type-dropdown',
-            options=[{'label': t, 'value': t} for t in merge_df['tour_type'].unique()],
-            value='Total',
-            clearable=False,
-            style={'width': '300px', 'margin-bottom': '20px'}
-        ),
-
-        html.Button("Show Weighted Person Trips", id='toggle-btn-tour', n_clicks=0, style={'margin-bottom': '20px'}),
-        dcc.Graph(id='bar-chart')
-    ], style={'padding': '20px'})
-])
-
-
-# === PAGE 3: Employee Trips Chart Page ===
-employee_tour_type_layout = html.Div([
-    get_navbar(),
-    html.Div([
-        html.H3(f"Scenario: {scenario_name}", style={"marginRight": "40px", "display": "inline-block"}),
-        html.H3(f"Model: {selected_model}", style={"display": "inline-block"}),
-        html.Br(),
-        html.Label("Employee Trips by Tour Type:"),
-        dcc.Dropdown(
-            id='employee-tour-type-dropdown',
-            options=[{'label': t, 'value': t} for t in merge_df_emp['tour_type'].unique()],
-            value='emp',
-            clearable=False,
-            style={'width': '300px', 'margin-bottom': '20px'}
-        ),
-
-        html.Button("Show Weighted Person Trips", id='toggle-btn-emp', n_clicks=0, style={'margin-bottom': '20px'}),
-        dcc.Graph(id='employee-bar-chart')
-    ], style={'padding': '20px'})
-])
-
-
-# === APP LAYOUT with Routing ===
-app.layout = html.Div([
-    dcc.Location(id="url"),
-    html.Div(id="page-content")
-])
-
-
-# === ROUTING CALLBACK ===
-@app.callback(
-    Output("page-content", "children"),
-    Input("url", "pathname")
+                html.Button("Show Weighted Person Trips", id='toggle-btn', n_clicks=0, style={'margin-bottom': '20px'}),
+                dcc.Graph(id='general-bar-chart')
+            ],
+            style={'padding': '20px'}
+        )
+    ]
 )
+
+tour_type_layout = html.Div(
+    [
+        get_navbar(),
+        html.Div(
+            [
+                html.H3(id="tour-scenario-title", style={"marginRight": "40px", "display": "inline-block"}),
+                html.H3(id="tour-model-title", style={"display": "inline-block"}),
+                html.Br(),
+                html.Label("Select Disaggregated Tour Type:"),
+                dcc.Dropdown(id='tour-type-dropdown', options=[], value=None, clearable=False,
+                             style={'width': '300px', 'margin-bottom': '20px'}),
+                html.Button("Show Weighted Person Trips", id='toggle-btn-tour', n_clicks=0, style={'margin-bottom': '20px'}),
+                dcc.Graph(id='bar-chart')
+            ],
+            style={'padding': '20px'}
+        )
+    ]
+)
+
+employee_tour_type_layout = html.Div(
+    [
+        get_navbar(),
+        html.Div(
+            [
+                html.H3(id="emp-scenario-title", style={"marginRight": "40px", "display": "inline-block"}),
+                html.H3(id="emp-model-title", style={"display": "inline-block"}),
+                html.Br(),
+                html.Label("Employee Trips by Tour Type:"),
+                dcc.Dropdown(id='employee-tour-type-dropdown', options=[], value=None, clearable=False,
+                             style={'width': '300px', 'margin-bottom': '20px'}),
+                html.Button("Show Weighted Person Trips", id='toggle-btn-emp', n_clicks=0, style={'margin-bottom': '20px'}),
+                dcc.Graph(id='employee-bar-chart')
+            ],
+            style={'padding': '20px'}
+        )
+    ]
+)
+
+# --- Routing & validation layout ---
+app.layout = html.Div([dcc.Location(id="url"), html.Div(id="page-content")])
+
+
+@app.callback(Output("page-content", "children"), Input("url", "pathname"))
 def display_page(pathname):
     if pathname == "/tour-type-page":
         return tour_type_layout
     elif pathname == "/employee-tour-type-page":
         return employee_tour_type_layout
-    else:
-        return summary_layout
+    return summary_layout
 
-# Callback for General Tour Type Chart (on summary page)
+# --- Helpers ---
+def _empty_fig(title: str = ""):
+    return px.bar(title=title)
+
+def _get_scenario_data_safe(scenario):
+    if not scenario or scenario not in santrips_dict:
+        raise PreventUpdate
+    return santrips_dict[scenario]
+
+# --- Fan-out: set titles, summary card, and dropdown options/values for all pages ---
+@app.callback(
+    Output("summary-scenario-title", "children"),
+    Output("summary-model-title", "children"),
+    Output("summary-card", "children"),
+    Output("general-tour-type-dropdown", "options"),
+    Output("general-tour-type-dropdown", "value"),
+    Input("scenario-dd", "value"),
+    Input("url", "pathname"),
+)
+
+def refresh_summary_for_scenario(scenario, pathname):
+    if pathname not in ("/", None):  # only when on summary page
+        raise PreventUpdate
+
+    d = _get_scenario_data_safe(scenario)
+    merge_df_general = d["merge_df_general"]
+
+    scenario_title = f"Scenario: {scenario}"
+    model_title = f"Model: {selected_model}"
+    summary_card = generate_summary_card(merge_df_general)
+
+    gen_vals = merge_df_general['tour_type_general'].dropna().unique().tolist()
+    gen_opts = [{'label': t, 'value': t} for t in gen_vals]
+    gen_val = 'Total' if 'Total' in gen_vals else (gen_vals[0] if gen_vals else None)
+
+    return scenario_title, model_title, summary_card, gen_opts, gen_val
+
+
+# --- TOUR PAGE: titles, dropdown ---
+@app.callback(
+    Output("tour-scenario-title", "children"),
+    Output("tour-model-title", "children"),
+    Output("tour-type-dropdown", "options"),
+    Output("tour-type-dropdown", "value"),
+    Input("scenario-dd", "value"),
+    Input("url", "pathname"),
+)
+def refresh_tour_for_scenario(scenario, pathname):
+    if pathname != "/tour-type-page":
+        raise PreventUpdate
+
+    d = _get_scenario_data_safe(scenario)
+    merge_df = d["merge_df"]
+
+    scenario_title = f"Scenario: {scenario}"
+    model_title = f"Model: {selected_model}"
+
+    tour_vals = merge_df['tour_type'].dropna().unique().tolist()
+    tour_opts = [{'label': t, 'value': t} for t in tour_vals]
+    tour_val = 'Total' if 'Total' in tour_vals else (tour_vals[0] if tour_vals else None)
+
+    return scenario_title, model_title, tour_opts, tour_val
+
+
+# --- EMPLOYEE PAGE: titles, dropdown ---
+@app.callback(
+    Output("emp-scenario-title", "children"),
+    Output("emp-model-title", "children"),
+    Output("employee-tour-type-dropdown", "options"),
+    Output("employee-tour-type-dropdown", "value"),
+    Input("scenario-dd", "value"),
+    Input("url", "pathname"),
+)
+def refresh_emp_for_scenario(scenario, pathname):
+    if pathname != "/employee-tour-type-page":
+        raise PreventUpdate
+
+    d = _get_scenario_data_safe(scenario)
+    merge_df_emp = d["merge_df_emp"]
+
+    scenario_title = f"Scenario: {scenario}"
+    model_title = f"Model: {selected_model}"
+
+    emp_vals = merge_df_emp['tour_type'].dropna().unique().tolist()
+    emp_opts = [{'label': t, 'value': t} for t in emp_vals]
+    emp_val = emp_vals[0] if emp_vals else None
+
+    return scenario_title, model_title, emp_opts, emp_val
+
+# --- Charts ---
 @app.callback(
     Output('general-bar-chart', 'figure'),
     Output('toggle-btn', 'children'),
+    Input('scenario-dd', 'value'),
     Input('general-tour-type-dropdown', 'value'),
     Input('toggle-btn', 'n_clicks')
 )
-def update_general_bar_chart(selected_general_tour_type, n_clicks):
-    show_weighted = n_clicks % 2 == 1
-    filtered_df = merge_df_general[merge_df_general['tour_type_general'] == selected_general_tour_type]
+def update_general_bar_chart(scenario, selected_general_tour_type, n_clicks):
+    if not scenario or scenario not in santrips_dict or not selected_general_tour_type:
+        return _empty_fig("No data"), "Show Weighted Person Trips"
+
+    show_weighted = (n_clicks % 2 == 1)
+    df = _get_scenario_data_safe(scenario)["merge_df_general"]
+    filtered = df[df['tour_type_general'] == selected_general_tour_type]
+
+    if filtered.empty:
+        return _empty_fig("No data"), ("Show Percentage of Trips" if show_weighted else "Show Weighted Person Trips")
 
     if show_weighted:
         value_vars = ["trip_by_mode_model", "trip_by_mode_survey"]
@@ -335,27 +476,31 @@ def update_general_bar_chart(selected_general_tour_type, n_clicks):
         y_label = "Percentage of Trips"
         btn_text = "Show Weighted Person Trips"
 
-    x_axis_order = ['Drop-off/Pick up', 'UBER/Lyft', 'Taxi', 'Personal Car Parked','Shared Shuttle Van','Rental Car','Walk','Public Transportation']
-
     fig = px.bar(
-        filtered_df.melt(id_vars=aggregator, value_vars=value_vars, var_name="Source", value_name=y_label),
+        filtered.melt(id_vars=aggregator, value_vars=value_vars, var_name="Source", value_name=y_label),
         x=aggregator, y=y_label, color="Source", barmode="group",
-        category_orders={'arrival_mode': x_axis_order},
+        category_orders={aggregator: X_ORDER},
         title=f"Model vs Survey {y_label} by Mode ({selected_general_tour_type})"
     )
     return fig, btn_text
 
-
-# Callback for Tour Type Page Chart
 @app.callback(
     Output('bar-chart', 'figure'),
     Output('toggle-btn-tour', 'children'),
+    Input('scenario-dd', 'value'),
     Input('tour-type-dropdown', 'value'),
     Input('toggle-btn-tour', 'n_clicks')
 )
-def update_bar_chart(selected_tour_type, n_clicks):
-    show_weighted = n_clicks % 2 == 1
-    filtered_df = merge_df[merge_df['tour_type'] == selected_tour_type]
+def update_bar_chart(scenario, selected_tour_type, n_clicks):
+    if not scenario or scenario not in santrips_dict or not selected_tour_type:
+        return _empty_fig("No data"), "Show Weighted Person Trips"
+
+    show_weighted = (n_clicks % 2 == 1)
+    df = _get_scenario_data_safe(scenario)["merge_df"]
+    filtered = df[df['tour_type'] == selected_tour_type]
+
+    if filtered.empty:
+        return _empty_fig("No data"), ("Show Percentage of Trips" if show_weighted else "Show Weighted Person Trips")
 
     if show_weighted:
         value_vars = ["trip_model", "trip_survey"]
@@ -365,27 +510,32 @@ def update_bar_chart(selected_tour_type, n_clicks):
         value_vars = ["trip_pct_model", "trip_pct_survey"]
         y_label = "Percentage of Trips"
         btn_text = "Show Weighted Person Trips"
-        
-    x_axis_order = ['Drop-off/Pick up', 'UBER/Lyft', 'Taxi', 'Personal Car Parked','Shared Shuttle Van','Rental Car','Walk','Public Transportation']
 
     fig = px.bar(
-        filtered_df.melt(id_vars=aggregator, value_vars=value_vars, var_name="Source", value_name=y_label),
+        filtered.melt(id_vars=aggregator, value_vars=value_vars, var_name="Source", value_name=y_label),
         x=aggregator, y=y_label, color="Source", barmode="group",
-        category_orders={'arrival_mode': x_axis_order},
+        category_orders={aggregator: X_ORDER},
         title=f"Model vs Survey {y_label} by Mode ({selected_tour_type})"
     )
     return fig, btn_text
 
-# Callback for Employee Trips by Tour Type Page
 @app.callback(
     Output('employee-bar-chart', 'figure'),
     Output('toggle-btn-emp', 'children'),
+    Input('scenario-dd', 'value'),
     Input('employee-tour-type-dropdown', 'value'),
     Input('toggle-btn-emp', 'n_clicks')
 )
-def update_employee_bar_chart(selected_tour_type, n_clicks):
-    show_weighted = n_clicks % 2 == 1
-    filtered_df = merge_df_emp[merge_df_emp['tour_type'] == selected_tour_type]
+def update_employee_bar_chart(scenario, selected_tour_type, n_clicks):
+    if not scenario or scenario not in santrips_dict or not selected_tour_type:
+        return _empty_fig("No data"), "Show Weighted Person Trips"
+
+    show_weighted = (n_clicks % 2 == 1)
+    df = _get_scenario_data_safe(scenario)["merge_df_emp"]
+    filtered = df[df['tour_type'] == selected_tour_type]
+
+    if filtered.empty:
+        return _empty_fig("No data"), ("Show Percentage of Trips" if show_weighted else "Show Weighted Person Trips")
 
     if show_weighted:
         value_vars = ["trip_model", "trip_survey"]
@@ -396,18 +546,14 @@ def update_employee_bar_chart(selected_tour_type, n_clicks):
         y_label = "Percentage of Weighted Person Trips"
         btn_text = "Show Weighted Person Trips"
 
-    x_axis_order = ['Drop-off/Pick up', 'UBER/Lyft', 'Taxi', 'Personal Car Parked',
-                    'Shared Shuttle Van', 'Rental Car', 'Walk', 'Public Transportation']
-
     fig = px.bar(
-        filtered_df.melt(id_vars=aggregator, value_vars=value_vars,
-                         var_name="Source", value_name=y_label),
+        filtered.melt(id_vars=aggregator, value_vars=value_vars, var_name="Source", value_name=y_label),
         x=aggregator, y=y_label, color="Source", barmode="group",
-        category_orders={'arrival_mode': x_axis_order},
+        category_orders={aggregator: X_ORDER},
         title=f"Model vs Survey {y_label} by Mode (Employee - {selected_tour_type})"
     )
     return fig, btn_text
 
-
+# --- Run ---
 if __name__ == '__main__':
-    app.run(debug=True, port=8051)
+    app.run(debug=True, port=8050)
