@@ -32,7 +32,7 @@ def read_metadata(scenario_path):
         return {
             "scenario_id": 999,
             "scenario_name": scenario_name,
-            "scenario_yr": 0
+            "scenario_yr": 2022
         }
     else:
         with open(meta_path, "r") as f:
@@ -49,14 +49,18 @@ def read_metadata(scenario_path):
 def load_survey_data():
      conn = get_connection()
      sd1 = read_table(f"""SELECT * FROM read_files('/Volumes/survey/sdia25/calibration/departing_trips_by_mode.csv')""", conn).drop('_rescued_data', axis=1)
-     sd1 = sd1.rename(columns={'airport_access_mode':'arrival_mode', 'respondent_type':'primary_purpose', 'inbound_bool':'inbound', 'person_trips':'weight_person_trip'})
-
+     sd1 = sd1.rename(columns={'airport_access_mode':'arrival_mode', 'respondent_type':'primary_purpose', 'inbound_bool':'inbound', 'person_trips':'weight_person_trip','origin_pmsa_label':'opmsa'})
+     
      return {
-            "santrips": sd1
+            "santrips": sd1,
         }
 
 # Model data
 def load_model_data(scenario_dict, selected_model, env):
+    # load geo crosswalk
+    conn = get_connection()
+    mgra2pmsa_xref = read_table(f"""SELECT * FROM tam.geo.mgra15_taz15_pmsa_xref""", conn).rename(columns={'MGRA':'mgra','TAZ':'taz','PSEUDOMSA':'origin_pmsa'})
+
     if env == "Local":
         for scenario_path in scenario_dict.keys():
             print(f"Loading data from scenario: {scenario_path}")
@@ -64,12 +68,13 @@ def load_model_data(scenario_dict, selected_model, env):
             # load scenario metadata
             scenario_meta = read_metadata(scenario_path)
 
-            # load model data
-            sdia_trip = pd.read_csv(os.path.join(scenario_path, r"output\airport.SAN\final_santrips.csv"))
+            # load model data and get trip tour type and origin pmsa
+            sdia_trip = pd.read_csv(os.path.join(scenario_path, r"output\airport.SAN\final_santrips.csv")).rename(columns={'origin':'origin_mgra'})
             sdia_tour = pd.read_csv(os.path.join(scenario_path, r"output\airport.SAN\final_santours.csv"))[['tour_id','tour_type']]
-            df1 = sdia_trip.merge(sdia_tour, on='tour_id')[['trip_mode','arrival_mode','tour_type','inbound','weight_person_trip']]
-            df1 = df1.query("inbound == True and tour_type != 'external'")  # constrain to inbound trip and non-external trip only due to the lack of outbound trip and external trip in survey data
-            
+            sdia_trip = sdia_trip.merge(mgra2pmsa_xref, left_on='origin_mgra', right_on='mgra', how='left')
+            df1 = sdia_trip.merge(sdia_tour, on='tour_id')[['origin_mgra','origin_pmsa','trip_mode','arrival_mode','tour_type','inbound','weight_person_trip']]
+            df1 = df1.query("inbound == True and tour_type != 'external'")  # constrain to inbound and non-external trips only, given the absence of outbound and external trips in the survey data
+
             # map model tour types to survey types
             tour_types_mapping = {
                                     'vis_per':'vis_nb',
