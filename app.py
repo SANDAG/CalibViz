@@ -214,6 +214,7 @@ def get_navbar():
                         options=[{'label': s, 'value': s} for s in scenarios],
                         value=default_scenario,
                         clearable=False,
+                        persistence=True,
                         style={'width': '280px'}
                     )
                 ],
