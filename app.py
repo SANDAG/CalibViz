@@ -44,7 +44,7 @@ else:
     model_data = load_model_data(scenario_dict, selected_model, env)
 
 
-# === Process airport trip mode choice data ===
+# === Process airport trip mode choice and destination choice data ===
 def process_santrips(trip_data, aggregator, emp):
     # ignore employee trips if emp is set to False
     if emp == False:
@@ -101,24 +101,27 @@ def process_santrips(trip_data, aggregator, emp):
     )
 
     # Ensure all modes in unique_modes are present in merged_df for each tour_type
-    unique_modes = list(set(arrival_mode_to_wsp.values()))
+    if aggregator == 'arrival_mode':
+        unique_modes = list(set(arrival_mode_to_wsp.values()))
+    elif aggregator == 'origin_pmsa':
+        unique_modes = list(trip_data['origin_pmsa'].unique())
     all_tour_types = trip_by_dTour_aggMode['tour_type'].unique()
     rows_to_add = []
 
     for tour_type in all_tour_types:
-        existing_modes = set(trip_by_dTour_aggMode.loc[trip_by_dTour_aggMode['tour_type'] == tour_type, 'arrival_mode'])
+        existing_modes = set(trip_by_dTour_aggMode.loc[trip_by_dTour_aggMode['tour_type'] == tour_type, aggregator])
         missing_modes = set(unique_modes) - existing_modes
         for mode in missing_modes:
             # Find the general tour type for this tour_type
             general_type = trip_by_dTour_aggMode.loc[trip_by_dTour_aggMode['tour_type'] == tour_type, 'tour_type_general'].iloc[0]
             rows_to_add.append({
-                'arrival_mode': mode,
+                aggregator: mode,
                 'tour_type': tour_type,
                 'trip': 0.0,
                 'trip_pct': 0.0,
                 'tour_type_general': general_type
             })
-        trip_by_dTour_aggMode = pd.concat([trip_by_dTour_aggMode, pd.DataFrame(rows_to_add)], ignore_index=True)
+    trip_by_dTour_aggMode = pd.concat([trip_by_dTour_aggMode, pd.DataFrame(rows_to_add)], ignore_index=True)
     
     if emp == False:
         # calculate total trip by general tour type and by arrival mode
@@ -135,48 +138,74 @@ def process_santrips(trip_data, aggregator, emp):
         trip_geMode_totals = trip_geMode_totals.rename(columns={'trip': 'trip_by_mode'}).drop(['tour_type'], axis=1)
         trip_geMode_totals['trip_total'] = trip_geMode_totals['trip_by_mode'].sum()
         trip_by_geTour_aggMode = pd.concat([trip_by_geTour_aggMode, trip_geMode_totals], ignore_index=True)
+        
         return trip_by_dTour_aggMode, trip_by_geTour_aggMode
     else:
         return trip_by_dTour_aggMode
 
     
 
-def merge_summarized_trip_data(model, survey, aggregator2):
-    return model.merge(survey, on=aggregator2, how='right', suffixes=('_model', '_survey'))
+def merge_summarized_trip_data(model, survey, aggregator):
+    return model.merge(survey, on=aggregator, how='right', suffixes=('_model', '_survey'))
 
 
 # Define result dictionary, aggregation, and employee trip inclusion
 santrips_dict = {}
 aggregator = 'arrival_mode'
+aggregator2 = 'origin_pmsa'
 emp = False  # Set to True to include employee trips
 
 # Process survey data
 # load trip by arrival mode and by tour type (i.e., market segment)
-survey_santrips, ge_survey_santrips = process_santrips(survey_data["santrips"], aggregator, emp)
-survey_emp_santrips = process_santrips(survey_data["santrips"], aggregator, True)
+survey_arrival, ge_survey_arrival = process_santrips(survey_data["santrips"], aggregator, emp)
+survey_emp_arrival = process_santrips(survey_data["santrips"], aggregator, True)
+
+# load trip by origin psma and by tour type (i.e., market segment)
+survey_pmsa, ge_survey_pmsa = process_santrips(survey_data["santrips"], aggregator2, emp)
+survey_emp_pmsa = process_santrips(survey_data["santrips"], aggregator2, True)
 
 # Process model data and merge with survey data
 for path, data in model_data.items():
     # get scenario name and id
     scenario_name = str(data['metadata']['scenario_id']) + ': ' + data['metadata']['scenario_name']
 
+    """
+    Trip mode choice: process airport trip mode choice by arrival mode and by tour type
+    """
     # load trip by arrival mode and by tour type (i.e., market segment)
-    model_santrips, ge_model_santrips = process_santrips(data["santrips"], aggregator, emp)
-    model_emp_santrips = process_santrips(data["santrips"], aggregator, True)
+    model_arrival, ge_model_arrival = process_santrips(data["santrips"], aggregator, emp)
+    model_emp_arrival = process_santrips(data["santrips"], aggregator, True)
 
     # get merged DataFrames for trip w/wo employee trips by arrival mode and by tour type (i.e., market segment)
-    merge_df = merge_summarized_trip_data(model_santrips, survey_santrips, ['tour_type', aggregator])
-    merge_df_general = merge_summarized_trip_data(ge_model_santrips, ge_survey_santrips, ['tour_type_general', aggregator])
-    merge_df_emp = merge_summarized_trip_data(model_emp_santrips, survey_emp_santrips, ['tour_type', aggregator])
+    merge_df = merge_summarized_trip_data(model_arrival, survey_arrival, ['tour_type', aggregator])
+    merge_df_general = merge_summarized_trip_data(ge_model_arrival, ge_survey_arrival, ['tour_type_general', aggregator])
+    merge_df_emp = merge_summarized_trip_data(model_emp_arrival, survey_emp_arrival, ['tour_type', aggregator])
+
+
+    """
+    Destination mode choice: process airport trip mode choice by pmsa and by tour type
+    """
+    # load trip by origin pmsa and by tour type (i.e., market segment)
+    model_pmsa, ge_model_pmsa = process_santrips(data["santrips"], aggregator2, emp)
+    model_emp_pmsa = process_santrips(data["santrips"], aggregator2, True)
+
+    # get merged DataFrames for trip w/wo employee trips by pmsa and by tour type (i.e., market segment)
+    merge_df2 = merge_summarized_trip_data(model_pmsa, survey_pmsa, ['tour_type', aggregator2])
+    merge_df_general2 = merge_summarized_trip_data(ge_model_pmsa, ge_survey_pmsa, ['tour_type_general', aggregator2])
+    merge_df_emp2 = merge_summarized_trip_data(model_emp_pmsa, survey_emp_pmsa, ['tour_type', aggregator2])
 
     # store merged DataFrames in the dictionary
     santrips_dict[scenario_name] = {
         "model": "airport.SAN",
         "merge_df": merge_df,
         "merge_df_general": merge_df_general,
-        "merge_df_emp": merge_df_emp
+        "merge_df_emp": merge_df_emp,
+        "merge_df2": merge_df2,
+        "merge_df_general2": merge_df_general2,
+        "merge_df_emp2": merge_df_emp2
     }
 
+    
 # === Establish Dash App ===
 # Ensure necessary data exist
 try:
@@ -188,20 +217,27 @@ except NameError:
 scenarios = sorted(santrips_dict.keys())
 default_scenario = scenarios[0] if scenarios else None
 
-# Common category order for plots
+# Global variables
 X_ORDER = [
     'Drop-off/Pick up', 'UBER/Lyft', 'Taxi', 'Personal Car Parked',
     'Shared Shuttle Van', 'Rental Car', 'Walk', 'Public Transportation'
 ]
+DEFAULT_MODE = "trip"  # or "dest"
 
 # --- App ---
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP], suppress_callback_exceptions=True)
 app.title = "CalibViz"
 
+
 # --- Navbar with Scenario dropdown ---
 def get_navbar():
     return html.Div(
         [
+            # Sidebar toggler
+            html.Button("☰", id="sidebar-toggle", n_clicks=0,
+                        style={'marginRight': '12px', 'fontSize': '20px',
+                               'background':'transparent','color':'white','border':'none','cursor':'pointer'}),
+
             html.Img(src='/assets/sandag-logo.png',
                      style={'height': '40px', 'marginLeft': 'auto', 'marginRight': '20px'}),
             html.Div("ABM3 Calibration Visualizer",
@@ -227,11 +263,27 @@ def get_navbar():
                     dcc.Link(dbc.Button("Disaggregated Tour Type", id="btn-tour", outline=True, size="sm", style={'color': 'white'}), href="/tour-type-page"),
                     dcc.Link(dbc.Button("Employee Trips", id="btn-emp", outline=True, size="sm", style={'color': 'white'}), href="/employee-tour-type-page"),
                 ]
-            )
+            ),
         ],
         style={'display': 'flex', 'justifyContent': 'space-between', 'alignItems': 'center',
                'padding': '10px 20px', 'backgroundColor': "#4c6f92", 'borderBottom': '1px solid #dee2e6'}
     )
+
+
+# --- Sidebar (collapsible) ---
+sidebar = dbc.Offcanvas(
+    [
+        html.H5(selected_model, className="mb-3"),
+        dbc.Button("Trip Mode Choice", id="btn-mode-trip", color="primary", outline=False, className="mb-2", n_clicks=0, style={"width":"100%"}),
+        dbc.Button("Destination Mode Choice", id="btn-mode-dest", color="secondary", outline=True, className="mb-2", n_clicks=0, style={"width":"100%"}),
+        html.Hr()
+    ],
+    id="sidebar-panel",
+    title="Choose Metric",
+    is_open=False,
+    placement="start",
+)
+
 
 # --- Summary Card ---
 def generate_summary_card(df: pd.DataFrame):
@@ -309,7 +361,6 @@ def generate_summary_card(df: pd.DataFrame):
 # --- Pages ---
 summary_layout = html.Div(
     [
-        get_navbar(),
         html.Div(
             [
                 html.H3(id="summary-model-title", style={"display": "inline-block"}),
@@ -329,7 +380,6 @@ summary_layout = html.Div(
 
 tour_type_layout = html.Div(
     [
-        get_navbar(),
         html.Div(
             [
                 html.H3(id="tour-model-title", style={"display": "inline-block"}),
@@ -347,7 +397,6 @@ tour_type_layout = html.Div(
 
 employee_tour_type_layout = html.Div(
     [
-        get_navbar(),
         html.Div(
             [
                 html.H3(id="emp-model-title", style={"display": "inline-block"}),
@@ -363,9 +412,20 @@ employee_tour_type_layout = html.Div(
     ]
 )
 
-# --- Routing & validation layout ---
-app.layout = html.Div([dcc.Location(id="url"), html.Div(id="page-content")])
 
+"""
+Callback functions
+"""
+# --- Establish App layout ---
+app.layout = html.Div([
+    dcc.Location(id="url"),
+    dcc.Store(id="mode-store", data=DEFAULT_MODE),
+    get_navbar(),
+    sidebar,                         # << the Offcanvas
+    html.Div(id="page-content")      # content below navbar/sidebar
+])
+
+# --- Buttons ---
 @app.callback(Output("page-content", "children"), Input("url", "pathname"))
 def display_page(pathname):
     if pathname == "/tour-type-page":
@@ -373,42 +433,6 @@ def display_page(pathname):
     elif pathname == "/employee-tour-type-page":
         return employee_tour_type_layout
     return summary_layout
-
-# --- Helpers ---
-def _empty_fig(title: str = ""):
-    return px.bar(title=title)
-
-def _get_scenario_data_safe(scenario):
-    if not scenario or scenario not in santrips_dict:
-        raise PreventUpdate
-    return santrips_dict[scenario]
-
-# --- Fan-out: set titles, summary card, and dropdown options/values for all pages ---
-@app.callback(
-    Output("summary-model-title", "children"),
-    Output("summary-card", "children"),
-    Output("general-tour-type-dropdown", "options"),
-    Output("general-tour-type-dropdown", "value"),
-    Input("scenario-dd", "value"),
-    Input("url", "pathname"),
-)
-
-def refresh_summary_for_scenario(scenario, pathname):
-    if pathname not in ("/", None):  # only when on summary page
-        raise PreventUpdate
-
-    d = _get_scenario_data_safe(scenario)
-    merge_df_general = d["merge_df_general"]
-
-    # scenario_title = f"Scenario: {scenario}"
-    model_title = f"Model: {selected_model}"
-    summary_card = generate_summary_card(merge_df_general)
-
-    gen_vals = merge_df_general['tour_type_general'].dropna().unique().tolist()
-    gen_opts = [{'label': t, 'value': t} for t in gen_vals]
-    gen_val = 'Total' if 'Total' in gen_vals else (gen_vals[0] if gen_vals else None)
-
-    return model_title, summary_card, gen_opts, gen_val
 
 # --- Highlight active button ---
 @app.callback(
@@ -430,6 +454,89 @@ def highlight_button(pathname):
 
     return home, tour, emp
 
+# --- sidebar toggle ---
+from dash import ctx
+
+# open/close
+@app.callback(
+    Output("sidebar-panel", "is_open"),
+    Input("sidebar-toggle", "n_clicks"),
+    State("sidebar-panel", "is_open"),
+)
+def toggle_sidebar(n, is_open):
+    if n:
+        return not is_open
+    return is_open
+
+# set mode + button styles
+@app.callback(
+    Output("mode-store", "data"),
+    Output("btn-mode-trip", "outline"),
+    Output("btn-mode-dest", "outline"),
+    Output("btn-mode-trip", "color"),
+    Output("btn-mode-dest", "color"),
+    Input("btn-mode-trip", "n_clicks"),
+    Input("btn-mode-dest", "n_clicks"),
+    State("mode-store", "data"),
+)
+def set_mode(n_trip, n_dest, current):
+    trg = ctx.triggered_id
+    mode = current
+    if trg == "btn-mode-trip":
+        mode = "trip"
+    elif trg == "btn-mode-dest":
+        mode = "dest"
+
+    # visual: active button filled (outline=False), inactive outline=True
+    if mode == "trip":
+        return mode, False, True, "primary", "secondary"
+    else:
+        return mode, True, False, "secondary", "primary"
+
+# --- Helpers ---
+def _empty_fig(title: str = ""):
+    return px.bar(title=title)
+
+def _get_scenario_data_safe(scenario):
+    if not scenario or scenario not in santrips_dict:
+        raise PreventUpdate
+    return santrips_dict[scenario]
+
+def _keys_for_mode(mode: str):
+    """Return (df_key, df_general_key, df_emp_key, aggregator_col, category_order_or_none, page_label)."""
+    if mode == "dest":
+        return ("merge_df2", "merge_df_general2", "merge_df_emp2", "origin_pmsa", None, "Destination Mode Choice")
+    # default trip mode
+    return ("merge_df", "merge_df_general", "merge_df_emp", "arrival_mode", X_ORDER, "Trip Mode Choice")
+
+def _sorted_categories(df, col):
+    cats = df[col].dropna().astype(str).unique().tolist()
+    return sorted(cats)
+
+# --- SUMMARY PAGE: titles, summary card, and dropdown  ---
+@app.callback(
+    Output("summary-model-title", "children"),
+    Output("summary-card", "children"),
+    Output("general-tour-type-dropdown", "options"),
+    Output("general-tour-type-dropdown", "value"),
+    Input("scenario-dd", "value"),
+    Input("url", "pathname"),
+    Input("mode-store", "data"),
+)
+def refresh_summary_for_scenario(scenario, pathname, mode):
+    if pathname not in ("/", None):
+        raise PreventUpdate
+    d = _get_scenario_data_safe(scenario)
+    _, df_general_key, _, aggregator_col, _, mode_label = _keys_for_mode(mode)
+    df_general = d[df_general_key]
+
+    model_title = f"Model: {selected_model} • {mode_label}"
+    summary_card = generate_summary_card(df_general)
+
+    gen_vals = df_general['tour_type_general'].dropna().unique().tolist()
+    gen_opts = [{'label': t, 'value': t} for t in gen_vals]
+    gen_val = 'Total' if 'Total' in gen_vals else (gen_vals[0] if gen_vals else None)
+    return model_title, summary_card, gen_opts, gen_val
 
 # --- TOUR PAGE: titles, dropdown ---
 @app.callback(
@@ -438,21 +545,19 @@ def highlight_button(pathname):
     Output("tour-type-dropdown", "value"),
     Input("scenario-dd", "value"),
     Input("url", "pathname"),
+    Input("mode-store", "data"),
 )
-def refresh_tour_for_scenario(scenario, pathname):
+def refresh_tour_for_scenario(scenario, pathname, mode):
     if pathname != "/tour-type-page":
         raise PreventUpdate
-
     d = _get_scenario_data_safe(scenario)
-    merge_df = d["merge_df"]
+    df_key, _, _, _, _, mode_label = _keys_for_mode(mode)
+    df = d[df_key]
 
-    # scenario_title = f"Scenario: {scenario}"
-    model_title = f"Model: {selected_model}"
-
-    tour_vals = merge_df['tour_type'].dropna().unique().tolist()
+    model_title = f"Model: {selected_model} • {mode_label}"
+    tour_vals = df['tour_type'].dropna().unique().tolist()
     tour_opts = [{'label': t, 'value': t} for t in tour_vals]
     tour_val = 'Total' if 'Total' in tour_vals else (tour_vals[0] if tour_vals else None)
-
     return model_title, tour_opts, tour_val
 
 
@@ -463,22 +568,21 @@ def refresh_tour_for_scenario(scenario, pathname):
     Output("employee-tour-type-dropdown", "value"),
     Input("scenario-dd", "value"),
     Input("url", "pathname"),
+    Input("mode-store", "data"),
 )
-def refresh_emp_for_scenario(scenario, pathname):
+def refresh_emp_for_scenario(scenario, pathname, mode):
     if pathname != "/employee-tour-type-page":
         raise PreventUpdate
-
     d = _get_scenario_data_safe(scenario)
-    merge_df_emp = d["merge_df_emp"]
+    _, _, df_emp_key, _, _, mode_label = _keys_for_mode(mode)
+    df_emp = d[df_emp_key]
 
-    # scenario_title = f"Scenario: {scenario}"
-    model_title = f"Model: {selected_model}"
+    model_title = f"Model: {selected_model} • {mode_label}"
+    vals = df_emp['tour_type'].dropna().unique().tolist()
+    opts = [{'label': t, 'value': t} for t in vals]
+    val = vals[0] if vals else None
+    return model_title, opts, val
 
-    emp_vals = merge_df_emp['tour_type'].dropna().unique().tolist()
-    emp_opts = [{'label': t, 'value': t} for t in emp_vals]
-    emp_val = emp_vals[0] if emp_vals else None
-
-    return model_title, emp_opts, emp_val
 
 # --- Bar Charts ---
 bar_color_sequence = ["#ff7f0e","#4461e2"]  # survey vs. model
@@ -488,109 +592,113 @@ bar_color_sequence = ["#ff7f0e","#4461e2"]  # survey vs. model
     Output('toggle-btn', 'children'),
     Input('scenario-dd', 'value'),
     Input('general-tour-type-dropdown', 'value'),
-    Input('toggle-btn', 'n_clicks')
+    Input('toggle-btn', 'n_clicks'),
+    Input('mode-store', 'data'),
 )
-def update_general_bar_chart(scenario, selected_general_tour_type, n_clicks):
+def update_general_bar_chart(scenario, selected_general_tour_type, n_clicks, mode):
     if not scenario or scenario not in santrips_dict or not selected_general_tour_type:
         return _empty_fig("No data"), "Show Weighted Person Trips"
 
-    show_weighted = (n_clicks % 2 == 1)
-    df = _get_scenario_data_safe(scenario)["merge_df_general"]
+    df_general_key = _keys_for_mode(mode)[1]
+    aggregator_col = _keys_for_mode(mode)[3]
+    cat_order = _keys_for_mode(mode)[4]
+
+    df = _get_scenario_data_safe(scenario)[df_general_key]
     filtered = df[df['tour_type_general'] == selected_general_tour_type]
-
     if filtered.empty:
-        return _empty_fig("No data"), ("Show Percentage of Trips" if show_weighted else "Show Weighted Person Trips")
+        btn = "Show Percentage of Trips" if (n_clicks % 2 == 1) else "Show Weighted Person Trips"
+        return _empty_fig("No data"), btn
 
+    show_weighted = (n_clicks % 2 == 1)
     if show_weighted:
-        value_vars = ["trip_by_mode_survey", "trip_by_mode_model"]
-        y_label = "Person Trips"
-        btn_text = "Show Percentage of Trips"
+        value_vars = ["trip_by_mode_survey", "trip_by_mode_model"]; y_label = "Person Trips"; btn_text = "Show Percentage of Trips"
     else:
-        value_vars = ["trip_pct_survey", "trip_pct_model"]
-        y_label = "Percentage of Trips"
-        btn_text = "Show Weighted Person Trips"
+        value_vars = ["trip_pct_survey", "trip_pct_model"]; y_label = "Percentage of Trips"; btn_text = "Show Weighted Person Trips"
+
+    # category order
+    orders = {aggregator_col: (cat_order if cat_order else _sorted_categories(filtered, aggregator_col))}
 
     fig = px.bar(
-        filtered.melt(id_vars=aggregator, value_vars=value_vars, var_name="Source", value_name=y_label),
-        x=aggregator, y=y_label, color="Source", barmode="group",
-        category_orders={aggregator: X_ORDER},
-        color_discrete_sequence=bar_color_sequence,
-        title=f"Model vs Survey {y_label} by Mode ({selected_general_tour_type})"
+        filtered.melt(id_vars=aggregator_col, value_vars=value_vars, var_name="Source", value_name=y_label),
+        x=aggregator_col, y=y_label, color="Source", barmode="group",
+        category_orders=orders, color_discrete_sequence=bar_color_sequence,
+        title=f"Model vs Survey {y_label} by {aggregator_col} ({selected_general_tour_type})"
     )
     return fig, btn_text
+
 
 @app.callback(
     Output('bar-chart', 'figure'),
     Output('toggle-btn-tour', 'children'),
     Input('scenario-dd', 'value'),
     Input('tour-type-dropdown', 'value'),
-    Input('toggle-btn-tour', 'n_clicks')
+    Input('toggle-btn-tour', 'n_clicks'),
+    Input('mode-store', 'data'),
 )
-def update_bar_chart(scenario, selected_tour_type, n_clicks):
+def update_bar_chart(scenario, selected_tour_type, n_clicks, mode):
     if not scenario or scenario not in santrips_dict or not selected_tour_type:
         return _empty_fig("No data"), "Show Weighted Person Trips"
 
-    show_weighted = (n_clicks % 2 == 1)
-    df = _get_scenario_data_safe(scenario)["merge_df"]
+    df_key, _, _, aggregator_col, cat_order, _ = _keys_for_mode(mode)
+    df = _get_scenario_data_safe(scenario)[df_key]
     filtered = df[df['tour_type'] == selected_tour_type]
-
     if filtered.empty:
-        return _empty_fig("No data"), ("Show Percentage of Trips" if show_weighted else "Show Weighted Person Trips")
+        btn = "Show Percentage of Trips" if (n_clicks % 2 == 1) else "Show Weighted Person Trips"
+        return _empty_fig("No data"), btn
 
+    show_weighted = (n_clicks % 2 == 1)
     if show_weighted:
-        value_vars = ["trip_survey", "trip_model"]
-        y_label = "Person Trips"
-        btn_text = "Show Percentage of Trips"
+        value_vars = ["trip_survey", "trip_model"]; y_label = "Weighted Person Trips"; btn_text = "Show Percentage of Trips"
     else:
-        value_vars = ["trip_pct_survey", "trip_pct_model"]
-        y_label = "Percentage of Trips"
-        btn_text = "Show Weighted Person Trips"
+        value_vars = ["trip_pct_survey", "trip_pct_model"]; y_label = "Percentage of Weighted Person Trips"; btn_text = "Show Weighted Person Trips"
+
+    orders = {aggregator_col: (cat_order if cat_order else _sorted_categories(filtered, aggregator_col))}
 
     fig = px.bar(
-        filtered.melt(id_vars=aggregator, value_vars=value_vars, var_name="Source", value_name=y_label),
-        x=aggregator, y=y_label, color="Source", barmode="group",
-        category_orders={aggregator: X_ORDER},
-        color_discrete_sequence=bar_color_sequence,
-        title=f"Model vs Survey {y_label} by Mode ({selected_tour_type})"
+        filtered.melt(id_vars=aggregator_col, value_vars=value_vars, var_name="Source", value_name=y_label),
+        x=aggregator_col, y=y_label, color="Source", barmode="group",
+        category_orders=orders, color_discrete_sequence=bar_color_sequence,
+        title=f"Model vs Survey {y_label} by {aggregator_col} ({selected_tour_type})"
     )
     return fig, btn_text
+
 
 @app.callback(
     Output('employee-bar-chart', 'figure'),
     Output('toggle-btn-emp', 'children'),
     Input('scenario-dd', 'value'),
     Input('employee-tour-type-dropdown', 'value'),
-    Input('toggle-btn-emp', 'n_clicks')
+    Input('toggle-btn-emp', 'n_clicks'),
+    Input('mode-store', 'data'),
 )
-def update_employee_bar_chart(scenario, selected_tour_type, n_clicks):
+def update_employee_bar_chart(scenario, selected_tour_type, n_clicks, mode):
     if not scenario or scenario not in santrips_dict or not selected_tour_type:
         return _empty_fig("No data"), "Show Weighted Person Trips"
 
-    show_weighted = (n_clicks % 2 == 1)
-    df = _get_scenario_data_safe(scenario)["merge_df_emp"]
+    _, _, df_emp_key, aggregator_col, cat_order, _ = _keys_for_mode(mode)
+    df = _get_scenario_data_safe(scenario)[df_emp_key]
     filtered = df[df['tour_type'] == selected_tour_type]
-
     if filtered.empty:
-        return _empty_fig("No data"), ("Show Percentage of Trips" if show_weighted else "Show Weighted Person Trips")
+        btn = "Show Percentage of Trips" if (n_clicks % 2 == 1) else "Show Weighted Person Trips"
+        return _empty_fig("No data"), btn
 
+    show_weighted = (n_clicks % 2 == 1)
     if show_weighted:
-        value_vars = ["trip_survey", "trip_model"]
-        y_label = "Weighted Person Trips"
-        btn_text = "Show Percentage of Trips"
+        value_vars = ["trip_survey", "trip_model"]; y_label = "Weighted Person Trips"; btn_text = "Show Percentage of Trips"
     else:
-        value_vars = ["trip_pct_survey", "trip_pct_model"]
-        y_label = "Percentage of Weighted Person Trips"
-        btn_text = "Show Weighted Person Trips"
+        value_vars = ["trip_pct_survey", "trip_pct_model"]; y_label = "Percentage of Weighted Person Trips"; btn_text = "Show Weighted Person Trips"
+
+    orders = {aggregator_col: (cat_order if cat_order else _sorted_categories(filtered, aggregator_col))}
 
     fig = px.bar(
-        filtered.melt(id_vars=aggregator, value_vars=value_vars, var_name="Source", value_name=y_label),
-        x=aggregator, y=y_label, color="Source", barmode="group",
-        category_orders={aggregator: X_ORDER},
-        color_discrete_sequence=bar_color_sequence,
-        title=f"Model vs Survey {y_label} by Mode (Employee - {selected_tour_type})"
+        filtered.melt(id_vars=aggregator_col, value_vars=value_vars, var_name="Source", value_name=y_label),
+        x=aggregator_col, y=y_label, color="Source", barmode="group",
+        category_orders=orders, color_discrete_sequence=bar_color_sequence,
+        title=f"Model vs Survey {y_label} by {aggregator_col} (Employee - {selected_tour_type})"
     )
     return fig, btn_text
 
+
 # --- Run ---
 if __name__ == '__main__':
-    app.run(debug=True, port=8050)
+    app.run(debug=True, port=8050, use_reloader=False)

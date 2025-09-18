@@ -3,19 +3,33 @@ import yaml
 import pandas as pd
 from pathlib import Path
 from databricks import sql
-from dotenv import load_dotenv
+from databricks.sdk.core import Config, oauth_service_principal
 
 import warnings
 warnings.filterwarnings("ignore")
 
 # === Utility functions ===
 # Configure Azure Databricks connection
-def get_connection():
+server_hostname = os.getenv("DATABRICKS_SERVER_HOSTNAME_DEV_WESTUS")
+client_id = os.getenv("CALIBVIZ_CLIENT_ID")
+client_secret = os.getenv("CALIBVIZ_CLIENT_SECRET")
+http_path = os.getenv("DATABRICKS_HTTP_PATH_DEV_WESTUS")
+
+user_agent_entry = os.getenv("DATABRICKS_HTTP_PATH_DEV_WESTUS")
+
+def credential_provider():
+  config = Config(
+    host          = f"https://{server_hostname}",
+    client_id     = client_id,
+    client_secret = client_secret)
+  return oauth_service_principal(config)
+
+def get_connection(user):
         return sql.connect(
-            server_hostname = os.getenv("DATABRICKS_SERVER_HOSTNAME"),
-            http_path = os.getenv("DATABRICKS_HTTP_PATH"),
-            access_token = os.getenv("DATABRICKS_TOKEN")
-            )
+                server_hostname      = server_hostname,
+                http_path            = http_path,
+                credentials_provider = credential_provider,
+                user_agent_entry = user)
 
 # Read table from Azure Databricks
 def read_table(query, conn):
@@ -46,19 +60,33 @@ def read_metadata(scenario_path):
     
 # === Load data ===
 # Survey data
-def load_survey_data():
-     conn = get_connection()
+def load_survey_data(user):
+     conn = get_connection(user)
      sd1 = read_table(f"""SELECT * FROM read_files('/Volumes/survey/sdia25/calibration/departing_trips_by_mode.csv')""", conn).drop('_rescued_data', axis=1)
-     sd1 = sd1.rename(columns={'airport_access_mode':'arrival_mode', 'respondent_type':'primary_purpose', 'inbound_bool':'inbound', 'person_trips':'weight_person_trip','origin_pmsa_label':'opmsa'})
+     sd1 = sd1.rename(columns={'airport_access_mode':'arrival_mode', 'respondent_type':'primary_purpose', 'inbound_bool':'inbound', 'person_trips':'weight_person_trip','origin_pmsa_label':'origin_pmsa'})
      
+     pmsa_mapping = {
+        "NULL": 0,
+        "DOWNTOWN": 1,
+        "CENTRAL": 2,
+        "NORTH_CITY": 3,
+        "SOUTH_SUBURBAN": 4,
+        "EAST_SUBURBAN": 5,
+        "NORTH_COUNTY_WEST": 6,
+        "NORTH_COUNTY_EAST": 7,
+        "EXTERNAL": 8   # Should be EAST_COUNTY in survey data
+    }
+
+     sd1["origin_pmsa"] = sd1["origin_pmsa"].map(pmsa_mapping)
+
      return {
             "santrips": sd1,
         }
 
 # Model data
-def load_model_data(scenario_dict, selected_model, env):
+def load_model_data(scenario_dict, selected_model, env, user):
     # load geo crosswalk
-    conn = get_connection()
+    conn = get_connection(user)
     mgra2pmsa_xref = read_table(f"""SELECT * FROM tam.geo.mgra15_taz15_pmsa_xref""", conn).rename(columns={'MGRA':'mgra','TAZ':'taz','PSEUDOMSA':'origin_pmsa'})
 
     if env == "Local":
@@ -72,8 +100,17 @@ def load_model_data(scenario_dict, selected_model, env):
             sdia_trip = pd.read_csv(os.path.join(scenario_path, r"output\airport.SAN\final_santrips.csv")).rename(columns={'origin':'origin_mgra'})
             sdia_tour = pd.read_csv(os.path.join(scenario_path, r"output\airport.SAN\final_santours.csv"))[['tour_id','tour_type']]
             sdia_trip = sdia_trip.merge(mgra2pmsa_xref, left_on='origin_mgra', right_on='mgra', how='left')
-            df1 = sdia_trip.merge(sdia_tour, on='tour_id')[['origin_mgra','origin_pmsa','trip_mode','arrival_mode','tour_type','inbound','weight_person_trip']]
-            df1 = df1.query("inbound == True and tour_type != 'external'")  # constrain to inbound and non-external trips only, given the absence of outbound and external trips in the survey data
+            df1 = sdia_trip.merge(sdia_tour, on='tour_id')[['origin_mgra','origin_pmsa','trip_mode','arrival_mode','tour_type','outbound','weight_person_trip']]
+            
+            """
+            09/18/2025 -jyen
+            In the airport model output trip files, inbound trips are defined as SAN-to-nonairport trips, and outbound trips as nonairport-to-SAN trips.
+            However, in SANDAG’s modeling practice, these definitions are reversed: inbound trips are considered nonairport-to-SAN, and outbound trips are SAN-to-nonairport.
+
+            To maintain consistency with SANDAG practice, we are temporarily using outbound == True to subset inbound trips (i.e., nonairport-to-SAN) from the airport model output trip files.
+            A final decision is still pending on whether to revise the inbound and outbound fields in the airport model output trip files to fully align with SANDAG’s modeling practice.
+            """
+            df1 = df1.query("outbound == True and tour_type != 'external'")  # constrain to inbound and non-external trips only, given the absence of outbound and external trips in the survey data
 
             # map model tour types to survey types
             tour_types_mapping = {
