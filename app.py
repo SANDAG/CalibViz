@@ -279,7 +279,7 @@ sidebar = dbc.Offcanvas(
     [
         html.H5(selected_model, className="mb-3"),
         dbc.Button("Trip Mode Choice", id="btn-mode-trip", color="primary", outline=False, className="mb-2", n_clicks=0, style={"width":"100%"}),
-        dbc.Button("Destination Mode Choice", id="btn-mode-dest", color="secondary", outline=True, className="mb-2", n_clicks=0, style={"width":"100%"}),
+        dbc.Button("Destination Choice", id="btn-mode-dest", color="secondary", outline=True, className="mb-2", n_clicks=0, style={"width":"100%"}),
         html.Hr()
     ],
     id="sidebar-panel",
@@ -509,7 +509,7 @@ def _get_scenario_data_safe(scenario):
 def _keys_for_mode(mode: str):
     """Return (df_key, df_general_key, df_emp_key, aggregator_col, category_order_or_none, page_label)."""
     if mode == "dest":
-        return ("merge_df2", "merge_df_general2", "merge_df_emp2", "origin_pmsa", None, "Destination Mode Choice")
+        return ("merge_df2", "merge_df_general2", "merge_df_emp2", "origin_pmsa", None, "Destination Choice")
     # default trip mode
     return ("merge_df", "merge_df_general", "merge_df_emp", "arrival_mode", X_ORDER, "Trip Mode Choice")
 

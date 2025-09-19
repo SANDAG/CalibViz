@@ -63,21 +63,11 @@ def read_metadata(scenario_path):
 def load_survey_data(user):
      conn = get_connection(user)
      sd1 = read_table(f"""SELECT * FROM read_files('/Volumes/survey/sdia25/calibration/departing_trips_by_mode.csv')""", conn).drop('_rescued_data', axis=1)
-     sd1 = sd1.rename(columns={'airport_access_mode':'arrival_mode', 'respondent_type':'primary_purpose', 'inbound_bool':'inbound', 'person_trips':'weight_person_trip','origin_pmsa_label':'origin_pmsa'})
+     sd1 = sd1.rename(columns={'airport_access_mode':'arrival_mode', 'respondent_type':'primary_purpose', 'inbound_bool':'inbound', 'person_trips':'weight_person_trip'})
      
-     pmsa_mapping = {
-        "NULL": 0,
-        "DOWNTOWN": 1,
-        "CENTRAL": 2,
-        "NORTH_CITY": 3,
-        "SOUTH_SUBURBAN": 4,
-        "EAST_SUBURBAN": 5,
-        "NORTH_COUNTY_WEST": 6,
-        "NORTH_COUNTY_EAST": 7,
-        "EXTERNAL": 8   # Should be EAST_COUNTY in survey data
-    }
-
-     sd1["origin_pmsa"] = sd1["origin_pmsa"].map(pmsa_mapping)
+     # Temporarily replace origin_pmsa value 99 with 8 and update its label to "EAST COUNTY"
+     sd1.loc[sd1['origin_pmsa'] == 99, 'origin_pmsa'] = 8
+     sd1.loc[sd1['origin_pmsa'] == 8, 'origin_pmsa_label'] = "EAST_COUNTY"
 
      return {
             "santrips": sd1,
