@@ -8,19 +8,23 @@ import dash_bootstrap_components as dbc
 import dash_leaflet as dl
 import plotly.express as px
 import plotly.graph_objects as go
-from dotenv import load_dotenv, find_dotenv
+from dotenv import load_dotenv, find_dotenv, dotenv_values
 from config import load_survey_data, load_model_data
 
 
 # === Detect App environment and read environment variables ===
+env_vars = dotenv_values()  # returns dict from .env
+for key, value in env_vars.items():
+    os.environ.setdefault(key, value)  # only set if not already present
+
 dotenv_path = find_dotenv()
 if dotenv_path:
-    load_dotenv(dotenv_path)
+    load_dotenv(dotenv_path, override=False)
+    user = os.getenv("USER_AGENT_ENTRY")
 env = os.getenv("ENV")
+
 if env == "Azure":
-    server_hostname = os.getenv("DATABRICKS_SERVER_HOSTNAME")
-    http_path = os.getenv("DATABRICKS_HTTP_PATH")
-    access_token = os.getenv("DATABRICKS_TOKEN")
+    pass
 elif env == "Local":
     scenario_list_str = os.getenv("SCENARIO_LIST")
     survey = os.getenv("SURVEY_PATH")
@@ -32,7 +36,7 @@ print(f"Running in environment: {env}")
 
 # === Load survey and model data ===
 # load survey data from Databricks
-survey_data = load_survey_data()
+survey_data = load_survey_data(user)
 
 # load model data from input environment
 if env == "Azure":
@@ -41,7 +45,7 @@ else:
     # get scenario dictionary and save metadata and model data for each scenario
     scenario_list = scenario_list_str.split(",") if scenario_list_str else []
     scenario_dict = {path : {} for path in scenario_list}
-    model_data = load_model_data(scenario_dict, selected_model, env)
+    model_data = load_model_data(scenario_dict, selected_model, env, user)
 
 
 # === Process airport trip mode choice and destination choice data ===
