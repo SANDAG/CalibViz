@@ -274,21 +274,6 @@ def get_navbar():
     )
 
 
-# --- Sidebar (collapsible) ---
-sidebar = dbc.Offcanvas(
-    [
-        html.H5(selected_model, className="mb-3"),
-        dbc.Button("Trip Mode Choice", id="btn-mode-trip", color="primary", outline=False, className="mb-2", n_clicks=0, style={"width":"100%"}),
-        dbc.Button("Destination Choice", id="btn-mode-dest", color="secondary", outline=True, className="mb-2", n_clicks=0, style={"width":"100%"}),
-        html.Hr()
-    ],
-    id="sidebar-panel",
-    title="Choose Metric",
-    is_open=False,
-    placement="start",
-)
-
-
 # --- Summary Card ---
 def generate_summary_card(df: pd.DataFrame):
     if df is None or df.empty:
@@ -361,6 +346,22 @@ def generate_summary_card(df: pd.DataFrame):
         ],
         style={"margin-bottom": "20px"}
     )
+
+
+# --- Sidebar (collapsible) ---
+sidebar = dbc.Offcanvas(
+    [
+        html.H5(selected_model, className="mb-3"),
+        dbc.Button("Trip Mode Choice", id="btn-mode-trip", color="primary", outline=False, className="mb-2", n_clicks=0, style={"width":"100%"}),
+        dbc.Button("Destination Choice", id="btn-mode-dest", color="secondary", outline=True, className="mb-2", n_clicks=0, style={"width":"100%"}),
+        html.Hr()
+    ],
+    id="sidebar-panel",
+    title="Choose Metric",
+    is_open=False,
+    placement="start",
+)
+
 
 # --- Pages ---
 summary_layout = html.Div(

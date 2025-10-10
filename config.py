@@ -64,10 +64,7 @@ def load_survey_data(user):
      conn = get_connection(user)
      sd1 = read_table(f"""SELECT * FROM read_files('/Volumes/survey/sdia25/calibration/departing_trips_by_mode.csv')""", conn).drop('_rescued_data', axis=1)
      sd1 = sd1.rename(columns={'airport_access_mode':'arrival_mode', 'respondent_type':'primary_purpose', 'inbound_bool':'inbound', 'person_trips':'weight_person_trip'})
-     
-     # Temporarily replace origin_pmsa value 99 with 8 and update its label to "EAST COUNTY"
-     sd1.loc[sd1['origin_pmsa'] == 99, 'origin_pmsa'] = 8
-     sd1.loc[sd1['origin_pmsa'] == 8, 'origin_pmsa_label'] = "EAST_COUNTY"
+     sd1['origin_pmsa'] = sd1['origin_pmsa'].astype(int).astype(str)
 
      return {
             "santrips": sd1,
@@ -75,7 +72,7 @@ def load_survey_data(user):
 
 # Model data
 def load_model_data(scenario_dict, selected_model, env, user):
-    # load geo crosswalk
+    # load mgra-pmsa crosswalk
     conn = get_connection(user)
     mgra2pmsa_xref = read_table(f"""SELECT * FROM tam.geo.mgra15_taz15_pmsa_xref""", conn).rename(columns={'MGRA':'mgra','TAZ':'taz','PSEUDOMSA':'origin_pmsa'})
 
@@ -101,6 +98,9 @@ def load_model_data(scenario_dict, selected_model, env, user):
             A final decision is still pending on whether to revise the inbound and outbound fields in the airport model output trip files to fully align with SANDAG’s modeling practice.
             """
             df1 = df1.query("outbound == True and tour_type != 'external'")  # constrain to inbound and non-external trips only, given the absence of outbound and external trips in the survey data
+
+            #
+            df1['origin_pmsa'] = df1['origin_pmsa'].astype(int).astype(str)
 
             # map model tour types to survey types
             tour_types_mapping = {
