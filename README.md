@@ -3,7 +3,9 @@ New python-based (Dash) calibration visualizer. This is currently being develope
 
 This reorganized version introduces a clean multi-page architecture using the Dash Pages framework.
 
-🗂️ Folder Structure
+## 🗂️ Folder Structure
+
+```
 calibviz_app/
 │
 ├── app.py                  # Creates Dash app, sets layout, defines global callbacks
@@ -26,6 +28,7 @@ calibviz_app/
 └── utils/
     ├── constants.py        # Global constants and color sequences
     └── callbacks_common.py # Shared helper functions
+```
 
 
 ## Setup Instructions
