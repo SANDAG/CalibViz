@@ -2,6 +2,11 @@
 __pycache__/
 *.py[cod]
 *$py.class
+data/__pycache__/
+layouts/__pycache__/
+pages/__pycache__/
+utils/__pycache__/
+
 
 # C extensions
 *.so
@@ -136,6 +141,7 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+old.env
 
 # Spyder project settings
 .spyderproject
@@ -146,6 +152,7 @@ venv.bak/
 
 # mkdocs documentation
 /site
+app_structure.yaml
 
 # mypy
 .mypy_cache/
